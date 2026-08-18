@@ -62,6 +62,33 @@ fn connected_addr_labels_require_explicit_opt_in() {
 }
 
 #[test]
+fn non_serving_peers_are_only_rejected_for_outbound_sync_connections() {
+    let outbound = ConnectedAddr::new_outbound_direct(peer_addr(8233));
+    let inbound = ConnectedAddr::new_inbound_direct(peer_addr(8233));
+
+    assert!(should_reject_non_serving_peer(
+        true,
+        &outbound,
+        PeerServices::empty()
+    ));
+    assert!(!should_reject_non_serving_peer(
+        false,
+        &outbound,
+        PeerServices::empty()
+    ));
+    assert!(!should_reject_non_serving_peer(
+        true,
+        &inbound,
+        PeerServices::empty()
+    ));
+    assert!(!should_reject_non_serving_peer(
+        true,
+        &outbound,
+        PeerServices::NODE_NETWORK
+    ));
+}
+
+#[test]
 fn noncanonical_shielded_proof_size_gets_ban_score() {
     let addr = peer_addr(8233);
     let change = inbound_error_address_change(
