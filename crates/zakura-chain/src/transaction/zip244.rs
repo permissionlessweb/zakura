@@ -33,10 +33,15 @@ use blake2b_simd::{Hash as Blake2bHash, Params, State};
 
 use crate::{
     orchard,
-    parameters::{NetworkUpgrade, TX_V5_VERSION_GROUP_ID, TX_V6_VERSION_GROUP_ID},
+    parameters::{
+        NetworkUpgrade, TX_V5_VERSION_GROUP_ID, TX_V6_VERSION_GROUP_ID,
+        TX_VCROSSLINK_VERSION_GROUP_ID,
+    },
     sapling,
     serialization::ZcashSerialize,
-    transaction::{sighash::CanonicalHashType, AuthDigest, Hash, SigHash, Transaction},
+    transaction::{
+        sighash::CanonicalHashType, AuthDigest, Hash, SigHash, StakingAction, Transaction,
+    },
     transparent,
 };
 
@@ -48,6 +53,7 @@ const ZCASH_TX_PERSONALIZATION_PREFIX: &[u8; 12] = b"ZcashTxHash_";
 const TX_OVERWINTERED_FLAG: u32 = 1 << 31;
 const TX_V5_VERSION: u32 = 5;
 const TX_V6_VERSION: u32 = 6;
+const TX_VCROSSLINK_VERSION: u32 = 7;
 
 // txid level-1 node personalizations
 const ZCASH_HEADERS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdHeadersHash";
@@ -93,6 +99,8 @@ const ZCASH_SAPLING_V6_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthSapliH_v6
 const ZCASH_ORCHARD_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaHash";
 const ZCASH_ORCHARD_V6_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaH_v6";
 const ZCASH_IRONWOOD_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthIrnwdH_v6";
+// ShieldedLabs zebra-crosslink / librustzcash 33dc74bf (`ZTxCrosslinkHash`).
+const ZCASH_CROSSLINK_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxCrosslinkHash";
 
 const EMPTY_TRANSPARENT_TXID_HASH: &[u8; 32] = &[
     0xc3, 0x3f, 0x2e, 0x95, 0x70, 0x5f, 0xaa, 0xb3, 0x5f, 0x8d, 0x53, 0x3f, 0xa6, 0x1e, 0x95, 0xc3,
@@ -188,6 +196,9 @@ fn update_serialized<T: ZcashSerialize>(state: &mut State, value: &T) {
 enum Zip244Version {
     V5,
     V6,
+    /// ShieldedLabs Crosslink (`version = 7`, group `0xFFFFFFFE`). V5 body plus
+    /// an optional staking-action digest node.
+    VCrosslink,
 }
 
 impl Zip244Version {
@@ -196,6 +207,7 @@ impl Zip244Version {
             | match self {
                 Self::V5 => TX_V5_VERSION,
                 Self::V6 => TX_V6_VERSION,
+                Self::VCrosslink => TX_VCROSSLINK_VERSION,
             }
     }
 
@@ -203,53 +215,58 @@ impl Zip244Version {
         match self {
             Self::V5 => TX_V5_VERSION_GROUP_ID,
             Self::V6 => TX_V6_VERSION_GROUP_ID,
+            Self::VCrosslink => TX_VCROSSLINK_VERSION_GROUP_ID,
         }
     }
 
     fn sapling_spends_noncompact_personalization(self) -> &'static [u8; 16] {
         match self {
-            Self::V5 => ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION,
+            Self::V5 | Self::VCrosslink => ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION,
             Self::V6 => ZCASH_SAPLING_SPENDS_V6_NONCOMPACT_HASH_PERSONALIZATION,
         }
     }
 
     fn sapling_spends_txid_includes_anchor(self) -> bool {
         match self {
-            Self::V5 => true,
+            Self::V5 | Self::VCrosslink => true,
             Self::V6 => false,
         }
     }
 
     fn sapling_auth_personalization(self) -> &'static [u8; 16] {
         match self {
-            Self::V5 => ZCASH_SAPLING_SIGS_HASH_PERSONALIZATION,
+            Self::V5 | Self::VCrosslink => ZCASH_SAPLING_SIGS_HASH_PERSONALIZATION,
             Self::V6 => ZCASH_SAPLING_V6_SIGS_HASH_PERSONALIZATION,
         }
     }
 
     fn empty_sapling_auth_hash(self) -> &'static [u8; 32] {
         match self {
-            Self::V5 => EMPTY_SAPLING_V5_AUTH_HASH,
+            Self::V5 | Self::VCrosslink => EMPTY_SAPLING_V5_AUTH_HASH,
             Self::V6 => EMPTY_SAPLING_V6_AUTH_HASH,
         }
     }
 
     fn sapling_auth_includes_anchor(self) -> bool {
         match self {
-            Self::V5 => false,
+            Self::V5 | Self::VCrosslink => false,
             Self::V6 => true,
         }
     }
 
     fn orchard_format(self) -> BundleCommitmentFormat {
         match self {
-            Self::V5 => BundleCommitmentFormat::OrchardV5,
+            Self::V5 | Self::VCrosslink => BundleCommitmentFormat::OrchardV5,
             Self::V6 => BundleCommitmentFormat::OrchardV6,
         }
     }
 
     fn has_ironwood(self) -> bool {
         matches!(self, Self::V6)
+    }
+
+    fn has_crosslink(self) -> bool {
+        matches!(self, Self::VCrosslink)
     }
 }
 
@@ -350,12 +367,14 @@ struct Zip244Parts<'a> {
     sapling: Option<&'a sapling::ShieldedData<sapling::SharedAnchor>>,
     orchard: Option<&'a orchard::ShieldedData>,
     ironwood: Option<&'a orchard::ShieldedData>,
+    staking: Option<&'a StakingAction>,
 }
 
 fn zip244_parts(tx: &Transaction) -> Option<Zip244Parts<'_>> {
     let version = match tx.version() {
         TX_V5_VERSION => Zip244Version::V5,
         TX_V6_VERSION => Zip244Version::V6,
+        TX_VCROSSLINK_VERSION => Zip244Version::VCrosslink,
         _ => return None,
     };
 
@@ -369,6 +388,7 @@ fn zip244_parts(tx: &Transaction) -> Option<Zip244Parts<'_>> {
         sapling: tx.sapling_shielded_data(),
         orchard: tx.orchard_shielded_data(),
         ironwood: tx.ironwood_shielded_data(),
+        staking: tx.staking_action(),
     })
 }
 
@@ -661,6 +681,7 @@ fn combine_txid_digests(
     sapling: &[u8; 32],
     orchard: &[u8; 32],
     ironwood: Option<&[u8; 32]>,
+    crosslink: Option<&[u8; 32]>,
 ) -> Blake2bHash {
     let mut personal = [0u8; 16];
     personal[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
@@ -675,8 +696,38 @@ fn combine_txid_digests(
     if let Some(ironwood) = ironwood {
         h.update(ironwood);
     }
+    // ShieldedLabs only appends the crosslink node when a staking action is
+    // present (not the empty personalization). Auth digest always includes it.
+    if let Some(crosslink) = crosslink {
+        h.update(crosslink);
+    }
 
     h.finalize()
+}
+
+/// `ZTxCrosslinkHash` of kind ‖ val LE64 ‖ target ‖ source. Names are not
+/// committed (ShieldedLabs `StakingAction::hash_to_state`).
+fn hash_staking_action(action: &StakingAction) -> [u8; 32] {
+    let mut h = hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION);
+    h.update(&[u8::from(action.kind)]);
+    h.update(&action.val.to_le_bytes());
+    h.update(&action.target);
+    h.update(&action.source);
+    finalize_node_hash(h)
+}
+
+fn hash_crosslink_txid(staking: Option<&StakingAction>) -> Option<[u8; 32]> {
+    staking.map(hash_staking_action)
+}
+
+fn hash_crosslink_auth(staking: Option<&StakingAction>) -> [u8; 32] {
+    match staking {
+        Some(action) => hash_staking_action(action),
+        None => {
+            let h = hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION);
+            finalize_node_hash(h)
+        }
+    }
 }
 
 fn txid_inner(parts: &Zip244Parts) -> Hash {
@@ -690,6 +741,11 @@ fn txid_inner(parts: &Zip244Parts) -> Hash {
         .version
         .has_ironwood()
         .then(|| hash_bundle_txid(parts.ironwood, BundleCommitmentFormat::IronwoodV6));
+    let crosslink = parts
+        .version
+        .has_crosslink()
+        .then(|| hash_crosslink_txid(parts.staking))
+        .flatten();
 
     Hash(
         combine_txid_digests(
@@ -699,6 +755,7 @@ fn txid_inner(parts: &Zip244Parts) -> Hash {
             &sapling,
             &orchard,
             ironwood.as_ref(),
+            crosslink.as_ref(),
         )
         .as_bytes()
         .try_into()
@@ -808,6 +865,10 @@ fn auth_digest_inner(parts: &Zip244Parts) -> AuthDigest {
         .version
         .has_ironwood()
         .then(|| hash_bundle_auth(parts.ironwood, BundleCommitmentFormat::IronwoodV6));
+    let crosslink = parts
+        .version
+        .has_crosslink()
+        .then(|| hash_crosslink_auth(parts.staking));
 
     let mut personal = [0u8; 16];
     personal[..12].copy_from_slice(ZCASH_AUTH_PERSONALIZATION_PREFIX);
@@ -820,6 +881,9 @@ fn auth_digest_inner(parts: &Zip244Parts) -> AuthDigest {
     h.update(&orchard);
     if let Some(ironwood) = ironwood {
         h.update(&ironwood);
+    }
+    if let Some(crosslink) = crosslink {
+        h.update(&crosslink);
     }
 
     AuthDigest(
@@ -851,6 +915,7 @@ pub(super) struct Zip244SighashCache {
     sapling: [u8; 32],
     orchard: [u8; 32],
     ironwood: Option<[u8; 32]>,
+    crosslink: Option<[u8; 32]>,
 }
 
 impl Zip244SighashCache {
@@ -904,6 +969,11 @@ impl Zip244SighashCache {
                 .version
                 .has_ironwood()
                 .then(|| hash_bundle_txid(parts.ironwood, BundleCommitmentFormat::IronwoodV6)),
+            crosslink: parts
+                .version
+                .has_crosslink()
+                .then(|| hash_crosslink_txid(parts.staking))
+                .flatten(),
         })
     }
 
@@ -926,6 +996,7 @@ impl Zip244SighashCache {
                 &self.sapling,
                 &self.orchard,
                 self.ironwood.as_ref(),
+                self.crosslink.as_ref(),
             )
             .as_bytes()
             .try_into()
@@ -1092,5 +1163,32 @@ mod tests {
                 "empty hash must match {personalization:?}",
             );
         }
+    }
+
+    /// ClT0 hashes v7 (`VCrosslink`) txs with native ZIP-244. Stock
+    /// `zcash_primitives` cannot parse that format, so falling through panics
+    /// at `Hash::from`.
+    #[test]
+    fn vcrosslink_txid_is_native_zip244() {
+        use crate::{
+            block::Height,
+            transaction::{LockTime, Transaction},
+        };
+
+        let tx = Transaction::VCrosslink {
+            network_upgrade: NetworkUpgrade::Nu6,
+            lock_time: LockTime::unlocked(),
+            expiry_height: Height(0),
+            inputs: vec![],
+            outputs: vec![],
+            sapling_shielded_data: None,
+            orchard_shielded_data: None,
+            staking_action: None,
+        };
+        assert!(
+            super::txid(&tx).is_some(),
+            "VCrosslink must not fall back to librustzcash"
+        );
+        let _ = tx.hash();
     }
 }

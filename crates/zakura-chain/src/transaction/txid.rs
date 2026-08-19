@@ -27,6 +27,8 @@ impl<'a> TxIdBuilder<'a> {
             | Transaction::V2 { .. }
             | Transaction::V3 { .. }
             | Transaction::V4 { .. } => self.txid_v1_to_v4(),
+            // VCrosslink is hashed natively in `zip244` (v7 header + optional
+            // `ZTxCrosslinkHash` node). Stock zcash_primitives cannot parse it.
             Transaction::V5 { .. } | Transaction::VCrosslink { .. } => self.txid_v5(),
             Transaction::V6 { .. } => self.txid_v6(),
         }
