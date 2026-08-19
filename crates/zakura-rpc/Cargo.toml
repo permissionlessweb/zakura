@@ -24,6 +24,7 @@ categories = [
 exclude = ["*.proto"]
 
 [features]
+crosslink = ["dep:zakura-crosslink"]
 # Production features that activate extra dependencies, or extra features in
 # dependencies
 
@@ -44,6 +45,7 @@ proptest-impl = [
 
 
 [dependencies]
+zakura-crosslink = { path = "../zakura-crosslink", optional = true }
 chrono = { workspace = true, features = ["clock", "std"] }
 futures = { workspace = true }
 

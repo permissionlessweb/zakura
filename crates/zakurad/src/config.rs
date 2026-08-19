@@ -89,6 +89,9 @@ pub struct ZakuradConfig {
 
     /// zcashd-compat mode configuration.
     pub zcashd_compat: crate::components::zcashd_compat::Config,
+
+    /// Crosslink / TFL lab gadget. Default disabled (stock PoW).
+    pub crosslink: zakura_crosslink::Config,
 }
 
 impl ZakuradConfig {

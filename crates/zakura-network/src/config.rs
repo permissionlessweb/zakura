@@ -422,11 +422,10 @@ impl Config {
         .await;
 
         if self.network.is_regtest() {
-            // Only return local peer addresses and skip loading the peer cache on Regtest.
+            // Skip the on-disk peer cache (it may contain public testnet IPs).
+            // Keep configured seed peers as-is so a Docker mesh can use
+            // container hostnames / non-loopback addresses.
             dns_peers
-                .into_iter()
-                .filter(PeerSocketAddr::is_localhost)
-                .collect()
         } else {
             // Ignore disk errors because the cache is optional and the method already logs them.
             let disk_peers = self.load_peer_cache().await.unwrap_or_default();

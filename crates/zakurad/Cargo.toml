@@ -74,6 +74,9 @@ features = [
 ]
 
 [features]
+# Lab Crosslink TFL gadget. Config is always present (enabled=false).
+# This feature turns on TFL spawn + RPC.
+crosslink = ["zakura-rpc/crosslink"]
 # In release builds, don't compile debug logging code, to improve performance.
 default-release-binaries = ["release_max_level_info", "progress-bar", "prometheus", "sentry", "opentelemetry"]
 
@@ -169,6 +172,7 @@ comparison-interpreter = ["zakura-script/comparison-interpreter"]
 
 [dependencies]
 zakura-chain = { path = "../zakura-chain", version = "6.0.0" }
+zakura-crosslink = { path = "../zakura-crosslink" }
 zakura-consensus = { path = "../zakura-consensus", version = "7.0.0" }
 zakura-header-chain = { path = "../zakura-header-chain", version = "1.0.0-rc0" }
 zakura-jsonl-trace = { path = "../zakura-jsonl-trace", version = "1.1.0" }

@@ -24,6 +24,7 @@ mod commitment;
 mod error;
 mod hash;
 mod header;
+mod fat_pointer;
 mod height;
 mod serialize;
 
@@ -41,6 +42,7 @@ pub use commitment::{
 };
 pub use hash::Hash;
 pub use header::{BlockTimeError, CountedHeader, Header, ZCASH_BLOCK_VERSION};
+pub use fat_pointer::{FatPointerSignature, FatPointerToBftBlock};
 pub use height::{Height, HeightDiff, TryIntoHeight};
 pub use serialize::{SerializedBlock, MAX_BLOCK_BYTES};
 

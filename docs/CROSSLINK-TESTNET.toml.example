@@ -1,0 +1,31 @@
+# Zakura + Crosslink prototype testnet (groot).
+# Copy to a local path and fill peers from the current Shielded Labs roster.
+# Run: zakurad --features crosslink --config this-file.toml start
+
+[network]
+network = "Testnet"
+listen_addr = "0.0.0.0:18233"
+# initial_testnet_peers = [ "crosslink-testnet-peer.example:18233" ]
+
+[rpc]
+listen_addr = "127.0.0.1:18232"
+enable_cookie_auth = false
+
+[state]
+ephemeral = false
+
+[mining]
+internal_miner = false
+
+[crosslink]
+enabled = true
+activation_height = 3
+confirmation_depth_sigma = 3
+insecure_user_name = "zakura-finalizer-1"
+# Tenderlink (required for the live Crosslink testnet — not the single-node lab loop)
+listen_address = "0.0.0.0:24834"
+public_address = "YOUR.PUBLIC.IP:24834"
+malachite_peers = [
+    # "PEER.IP:24834",
+]
+do_not_manipulate_config = false

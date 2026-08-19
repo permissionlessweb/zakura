@@ -626,6 +626,15 @@ impl StartCmd {
             tokio::spawn(std::future::pending().in_current_span())
         };
 
+        #[cfg(feature = "crosslink")]
+        {
+            if config.crosslink.enabled {
+                info!("spawning Crosslink TFL service (lab prototype)");
+                let tfl = zakura_crosslink::spawn_tfl_service(state.clone(), config.crosslink.clone());
+                zakura_crosslink::install_global(tfl);
+            }
+        }
+
         let zcashd_compat_shutdown_timeout =
             Self::zcashd_compat_supervisor_shutdown_timeout(&config);
         let zcashd_compat_supervisor_config =

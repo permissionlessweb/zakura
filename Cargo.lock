@@ -505,6 +505,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "blake2b_simd"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5146,7 +5155,7 @@ dependencies = [
  "getrandom 0.4.3",
  "lru-slab",
  "rand 0.10.2",
- "rand_pcg",
+ "rand_pcg 0.10.2",
  "ring",
  "rustc-hash",
  "rustls",
@@ -5284,6 +5293,15 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rand_pcg"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b48ac3f7ffaab7fac4d2376632268aa5f89abdb55f7ebf8f4d11fffccb2320f7"
+dependencies = [
+ "rand_core 0.9.5",
+]
 
 [[package]]
 name = "rand_pcg"
@@ -6357,6 +6375,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "snow"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "599b506ccc4aff8cf7844bc42cf783009a434c1e26c964432560fb6d6ad02d82"
+dependencies = [
+ "blake2",
+ "chacha20poly1305",
+ "curve25519-dalek",
+ "getrandom 0.3.4",
+ "rustc_version",
+ "subtle",
+]
+
+[[package]]
 name = "socket2"
 version = "0.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6645,6 +6677,23 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tenderlink"
+version = "0.1.0"
+source = "git+https://git.sr.ht/~azmr/stuff?rev=0e885095939781e2ce6320ab45097aeb85873449#0e885095939781e2ce6320ab45097aeb85873449"
+dependencies = [
+ "blake3",
+ "byteorder",
+ "ed25519-zebra",
+ "rand 0.9.4",
+ "rand_chacha 0.9.0",
+ "rand_pcg 0.9.0",
+ "snow",
+ "socket2 0.6.4",
+ "static_assertions",
+ "tokio",
 ]
 
 [[package]]
@@ -8321,6 +8370,7 @@ dependencies = [
  "vergen-gitcl",
  "zakura-chain",
  "zakura-consensus",
+ "zakura-crosslink",
  "zakura-header-chain",
  "zakura-jsonl-trace",
  "zakura-network",
@@ -8456,6 +8506,28 @@ dependencies = [
  "zcash_protocol",
  "zcash_script",
  "zcash_transparent",
+]
+
+[[package]]
+name = "zakura-crosslink"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "byteorder",
+ "ed25519-zebra",
+ "futures",
+ "hex",
+ "serde",
+ "snow",
+ "tenderlink",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "zakura-chain",
+ "zakura-state",
+ "zakura-test",
 ]
 
 [[package]]
@@ -8606,6 +8678,7 @@ dependencies = [
  "which",
  "zakura-chain",
  "zakura-consensus",
+ "zakura-crosslink",
  "zakura-network",
  "zakura-node-services",
  "zakura-script",

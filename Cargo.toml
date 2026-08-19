@@ -5,6 +5,7 @@ members = [
         "crates/zakura-header-chain",
         "crates/zakura-network",
         "crates/zakura-state",
+        "crates/zakura-crosslink",
         "crates/zakura-script",
         "crates/zakura-consensus",
         "crates/zakura-rpc",

@@ -805,6 +805,27 @@ pub trait Rpc {
     /// tags: network
     async fn add_node(&self, addr: PeerSocketAddr, command: AddNodeCommand) -> Result<()>;
 
+
+    /// Crosslink: is TFL activated? Missing gadget => false, not a fake tip.
+    #[cfg(feature = "crosslink")]
+    #[method(name = "get_tfl_is_activated")]
+    async fn get_tfl_is_activated(&self) -> Result<bool>;
+
+    /// Crosslink: finalized PoW height and hash.
+    #[cfg(feature = "crosslink")]
+    #[method(name = "get_tfl_final_block_height_and_hash")]
+    async fn get_tfl_final_block_height_and_hash(&self) -> Result<Option<GetBlockHeightAndHashResponse>>;
+
+    /// Crosslink: hex-encoded fat pointer (ZcashSerialize) to the BFT tip.
+    #[cfg(feature = "crosslink")]
+    #[method(name = "get_tfl_fat_pointer_to_bft_chain_tip")]
+    async fn get_tfl_fat_pointer_to_bft_chain_tip(&self) -> Result<Option<String>>;
+
+    /// Crosslink: finalizer roster as (hex pubkey, voting power).
+    #[cfg(feature = "crosslink")]
+    #[method(name = "get_tfl_roster_zats")]
+    async fn get_tfl_roster_zats(&self) -> Result<Vec<(String, u64)>>;
+
     /// Returns an OpenRPC schema as a description of this service.
     #[method(name = "rpc.discover")]
     fn openrpc(&self) -> openrpsee::openrpc::Response;
@@ -3185,6 +3206,104 @@ where
                 "addnode command is only supported on regtest",
                 None::<()>,
             ));
+        }
+    }
+
+
+    #[cfg(feature = "crosslink")]
+    async fn get_tfl_is_activated(&self) -> Result<bool> {
+        let Some(tfl) = zakura_crosslink::global() else {
+            return Ok(false);
+        };
+        match tfl.call(zakura_crosslink::TFLServiceRequest::IsTFLActivated).await {
+            Ok(zakura_crosslink::TFLServiceResponse::IsTFLActivated(b)) => Ok(b),
+            Ok(_) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "unexpected TFL response",
+                None::<()>,
+            )),
+            Err(e) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                e.to_string(),
+                None::<()>,
+            )),
+        }
+    }
+
+    #[cfg(feature = "crosslink")]
+    async fn get_tfl_final_block_height_and_hash(
+        &self,
+    ) -> Result<Option<GetBlockHeightAndHashResponse>> {
+        let Some(tfl) = zakura_crosslink::global() else {
+            return Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "TFL not running",
+                None::<()>,
+            ));
+        };
+        match tfl.call(zakura_crosslink::TFLServiceRequest::FinalBlockHeightHash).await {
+            Ok(zakura_crosslink::TFLServiceResponse::FinalBlockHeightHash(None)) => Ok(None),
+            Ok(zakura_crosslink::TFLServiceResponse::FinalBlockHeightHash(Some((h, hash)))) => {
+                Ok(Some(GetBlockHeightAndHashResponse::new(h, hash)))
+            }
+            Ok(_) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "unexpected TFL response",
+                None::<()>,
+            )),
+            Err(e) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                e.to_string(),
+                None::<()>,
+            )),
+        }
+    }
+
+    #[cfg(feature = "crosslink")]
+    async fn get_tfl_fat_pointer_to_bft_chain_tip(&self) -> Result<Option<String>> {
+        let Some(tfl) = zakura_crosslink::global() else {
+            return Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "TFL not running",
+                None::<()>,
+            ));
+        };
+        match tfl.call(zakura_crosslink::TFLServiceRequest::FatPointerToBFTChainTip).await {
+            Ok(zakura_crosslink::TFLServiceResponse::FatPointerToBFTChainTip(bytes)) => {
+                Ok(Some(hex::encode(bytes)))
+            }
+            Ok(_) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "unexpected TFL response",
+                None::<()>,
+            )),
+            Err(e) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                e.to_string(),
+                None::<()>,
+            )),
+        }
+    }
+
+    #[cfg(feature = "crosslink")]
+    async fn get_tfl_roster_zats(&self) -> Result<Vec<(String, u64)>> {
+        let Some(tfl) = zakura_crosslink::global() else {
+            return Ok(Vec::new());
+        };
+        match tfl.call(zakura_crosslink::TFLServiceRequest::Roster).await {
+            Ok(zakura_crosslink::TFLServiceResponse::Roster(rows)) => {
+                Ok(rows.into_iter().map(|(pk, p)| (hex::encode(pk), p)).collect())
+            }
+            Ok(_) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "unexpected TFL response",
+                None::<()>,
+            )),
+            Err(e) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                e.to_string(),
+                None::<()>,
+            )),
         }
     }
 
