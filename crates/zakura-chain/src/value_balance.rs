@@ -27,6 +27,8 @@ pub struct ValueBalance<C> {
     orchard: Amount<C>,
     deferred: Amount<C>,
     ironwood: Amount<C>,
+    staking_bonded: Amount<C>,
+    staking_unbonded: Amount<C>,
 }
 
 impl<C> ValueBalance<C>
@@ -147,6 +149,32 @@ where
         self
     }
 
+    /// Creates a [`ValueBalance`] from the given staking-bonded amount.
+    pub fn from_staking_bonded_amount(staking_bonded_amount: Amount<C>) -> Self {
+        ValueBalance {
+            staking_bonded: staking_bonded_amount,
+            ..ValueBalance::zero()
+        }
+    }
+
+    /// Creates a [`ValueBalance`] from the given staking-unbonded amount.
+    pub fn from_staking_unbonded_amount(staking_unbonded_amount: Amount<C>) -> Self {
+        ValueBalance {
+            staking_unbonded: staking_unbonded_amount,
+            ..ValueBalance::zero()
+        }
+    }
+
+    /// Returns the staking-bonded amount.
+    pub fn staking_bonded_amount(&self) -> Amount<C> {
+        self.staking_bonded
+    }
+
+    /// Returns the staking-unbonded amount.
+    pub fn staking_unbonded_amount(&self) -> Amount<C> {
+        self.staking_unbonded
+    }
+
     /// Creates a [`ValueBalance`] where all the pools are zero.
     pub fn zero() -> Self {
         let zero = Amount::zero();
@@ -157,6 +185,8 @@ where
             orchard: zero,
             deferred: zero,
             ironwood: zero,
+            staking_bonded: zero,
+            staking_unbonded: zero,
         }
     }
 
@@ -173,6 +203,8 @@ where
             orchard: self.orchard.constrain().map_err(Orchard)?,
             deferred: self.deferred.constrain().map_err(Deferred)?,
             ironwood: self.ironwood.constrain().map_err(Ironwood)?,
+            staking_bonded: self.staking_bonded.constrain().map_err(StakingBonded)?,
+            staking_unbonded: self.staking_unbonded.constrain().map_err(StakingUnbonded)?,
         })
     }
 }
@@ -199,7 +231,13 @@ impl ValueBalance<NegativeAllowed> {
         // like the orchard bundle; it is zero for transactions without an ironwood bundle.
         //
         // This will error if the remaining value in the transaction value pool is negative.
-        (self.transparent + self.sprout + self.sapling + self.orchard + self.ironwood)?
+        (self.transparent
+            + self.sprout
+            + self.sapling
+            + self.orchard
+            + self.ironwood
+            + self.staking_bonded
+            + self.staking_unbonded)?
             .constrain::<NonNegative>()
     }
 }
@@ -352,8 +390,8 @@ impl ValueBalance<NonNegative> {
     ///
     /// The `ironwood` pool (NU6.3 onward) is appended after `deferred`, so that records written by
     /// earlier Zebra versions (32 bytes without `deferred`, or 40 bytes with it) remain parsable by
-    /// [`Self::from_bytes`].
-    pub fn to_bytes(self) -> [u8; 48] {
+    /// [`Self::from_bytes`]. Staking pools (Season 1) are appended after ironwood (64 bytes).
+    pub fn to_bytes(self) -> [u8; 64] {
         match [
             self.transparent.to_bytes(),
             self.sprout.to_bytes(),
@@ -361,28 +399,30 @@ impl ValueBalance<NonNegative> {
             self.orchard.to_bytes(),
             self.deferred.to_bytes(),
             self.ironwood.to_bytes(),
+            self.staking_bonded.to_bytes(),
+            self.staking_unbonded.to_bytes(),
         ]
         .concat()
         .try_into()
         {
             Ok(bytes) => bytes,
             _ => unreachable!(
-                "six [u8; 8] should always concat with no error into a single [u8; 48]"
+                "eight [u8; 8] should always concat with no error into a single [u8; 64]"
             ),
         }
     }
 
     /// From byte array
     ///
-    /// Accepts 32-byte (pre-`deferred`), 40-byte (pre-`ironwood`), and 48-byte records; missing
-    /// trailing pools default to zero.
+    /// Accepts 32-byte (pre-`deferred`), 40-byte (pre-`ironwood`), 48-byte (pre-staking),
+    /// and 64-byte records; missing trailing pools default to zero.
     #[allow(clippy::unwrap_in_result)]
     pub fn from_bytes(bytes: &[u8]) -> Result<ValueBalance<NonNegative>, ValueBalanceError> {
         let bytes_length = bytes.len();
 
         // Return an error early if bytes don't have the right length instead of panicking later.
         match bytes_length {
-            32 | 40 | 48 => {}
+            32 | 40 | 48 | 64 => {}
             _ => return Err(Unparsable),
         };
 
@@ -416,7 +456,7 @@ impl ValueBalance<NonNegative> {
 
         let deferred = match bytes_length {
             32 => Amount::zero(),
-            40 | 48 => Amount::from_bytes(
+            40 | 48 | 64 => Amount::from_bytes(
                 bytes[32..40]
                     .try_into()
                     .expect("deferred amount should be parsable"),
@@ -427,12 +467,34 @@ impl ValueBalance<NonNegative> {
 
         let ironwood = match bytes_length {
             32 | 40 => Amount::zero(),
-            48 => Amount::from_bytes(
+            48 | 64 => Amount::from_bytes(
                 bytes[40..48]
                     .try_into()
                     .expect("ironwood amount should be parsable"),
             )
             .map_err(Ironwood)?,
+            _ => return Err(Unparsable),
+        };
+
+        let staking_bonded = match bytes_length {
+            32 | 40 | 48 => Amount::zero(),
+            64 => Amount::from_bytes(
+                bytes[48..56]
+                    .try_into()
+                    .expect("staking_bonded amount should be parsable"),
+            )
+            .map_err(StakingBonded)?,
+            _ => return Err(Unparsable),
+        };
+
+        let staking_unbonded = match bytes_length {
+            32 | 40 | 48 => Amount::zero(),
+            64 => Amount::from_bytes(
+                bytes[56..64]
+                    .try_into()
+                    .expect("staking_unbonded amount should be parsable"),
+            )
+            .map_err(StakingUnbonded)?,
             _ => return Err(Unparsable),
         };
 
@@ -443,6 +505,8 @@ impl ValueBalance<NonNegative> {
             orchard,
             deferred,
             ironwood,
+            staking_bonded,
+            staking_unbonded,
         })
     }
 }
@@ -468,6 +532,12 @@ pub enum ValueBalanceError {
     /// ironwood amount error {0}
     Ironwood(amount::Error),
 
+    /// staking_bonded amount error {0}
+    StakingBonded(amount::Error),
+
+    /// staking_unbonded amount error {0}
+    StakingUnbonded(amount::Error),
+
     /// ValueBalance is unparsable
     Unparsable,
 }
@@ -481,6 +551,8 @@ impl fmt::Display for ValueBalanceError {
             Orchard(e) => format!("orchard amount err: {e}"),
             Deferred(e) => format!("deferred amount err: {e}"),
             Ironwood(e) => format!("ironwood amount err: {e}"),
+            StakingBonded(e) => format!("staking_bonded amount err: {e}"),
+            StakingUnbonded(e) => format!("staking_unbonded amount err: {e}"),
             Unparsable => "value balance is unparsable".to_string(),
         })
     }
@@ -499,6 +571,9 @@ where
             orchard: (self.orchard + rhs.orchard).map_err(Orchard)?,
             deferred: (self.deferred + rhs.deferred).map_err(Deferred)?,
             ironwood: (self.ironwood + rhs.ironwood).map_err(Ironwood)?,
+            staking_bonded: (self.staking_bonded + rhs.staking_bonded).map_err(StakingBonded)?,
+            staking_unbonded: (self.staking_unbonded + rhs.staking_unbonded)
+                .map_err(StakingUnbonded)?,
         })
     }
 }
@@ -549,6 +624,9 @@ where
             orchard: (self.orchard - rhs.orchard).map_err(Orchard)?,
             deferred: (self.deferred - rhs.deferred).map_err(Deferred)?,
             ironwood: (self.ironwood - rhs.ironwood).map_err(Ironwood)?,
+            staking_bonded: (self.staking_bonded - rhs.staking_bonded).map_err(StakingBonded)?,
+            staking_unbonded: (self.staking_unbonded - rhs.staking_unbonded)
+                .map_err(StakingUnbonded)?,
         })
     }
 }
@@ -619,6 +697,8 @@ where
             orchard: self.orchard.neg(),
             deferred: self.deferred.neg(),
             ironwood: self.ironwood.neg(),
+            staking_bonded: self.staking_bonded.neg(),
+            staking_unbonded: self.staking_unbonded.neg(),
         }
     }
 }

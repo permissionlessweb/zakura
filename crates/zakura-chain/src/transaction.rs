@@ -1,6 +1,6 @@
 //! Transactions and transaction-related structures.
 
-use std::{collections::HashMap, fmt, iter, sync::Arc};
+use std::{collections::HashMap, fmt, iter, ops::Neg, sync::Arc};
 
 use halo2::pasta::pallas;
 
@@ -1783,6 +1783,32 @@ impl Transaction {
         ValueBalance::from_ironwood_amount(ironwood_value_balance)
     }
 
+    /// Season 1 staking pool delta (crosslink_monolith v13).
+    ///
+    /// Create-bond moves value out of the tx pool into `staking_bonded`.
+    /// Withdraw moves value into the tx pool from `staking_unbonded`.
+    pub fn staking_action_value_balance(&self) -> ValueBalance<NegativeAllowed> {
+        match self {
+            Self::VCrosslink {
+                staking_action: Some(action),
+                ..
+            } => match action.kind {
+                StakingActionKind::CreateNewDelegationBond => {
+                    let amt = Amount::<NegativeAllowed>::try_from(action.amount_zats as i64)
+                        .unwrap_or_else(|_| Amount::zero());
+                    ValueBalance::from_staking_bonded_amount(amt.neg())
+                }
+                StakingActionKind::WithdrawDelegationBond => {
+                    Amount::<NegativeAllowed>::try_from(action.amount_zats as i64)
+                        .map(ValueBalance::from_staking_unbonded_amount)
+                        .unwrap_or_else(|_| ValueBalance::zero())
+                }
+                _ => ValueBalance::zero(),
+            },
+            _ => ValueBalance::zero(),
+        }
+    }
+
     /// Returns the value balances for this transaction using the provided transparent outputs.
     pub(crate) fn value_balance_from_outputs(
         &self,
@@ -1793,6 +1819,7 @@ impl Transaction {
             + self.sapling_value_balance()
             + self.orchard_value_balance()
             + self.ironwood_value_balance()
+            + self.staking_action_value_balance()
     }
 
     /// Returns the value balances for this transaction.

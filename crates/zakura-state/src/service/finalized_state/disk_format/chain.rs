@@ -55,7 +55,7 @@ pub enum HistoryTreeDecodeError {
 }
 
 impl IntoDisk for ValueBalance<NonNegative> {
-    type Bytes = [u8; 48];
+    type Bytes = [u8; 64];
 
     fn as_bytes(&self) -> Self::Bytes {
         self.to_bytes()

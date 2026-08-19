@@ -112,4 +112,11 @@ fn value_balance_bytes_report_invalid_tail_pool() {
         ValueBalance::<NonNegative>::from_bytes(&bytes[..47]),
         Err(ValueBalanceError::Unparsable)
     );
+    bytes[40..48].copy_from_slice(&0_i64.to_le_bytes());
+    assert_eq!(
+        ValueBalance::<NonNegative>::from_bytes(&bytes[..48])
+            .expect("48-byte pre-staking record parses")
+            .to_bytes()[48..],
+        [0u8; 16]
+    );
 }
