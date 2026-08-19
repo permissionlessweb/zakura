@@ -247,7 +247,11 @@ pub(crate) fn block_commitment_is_valid_for_chain_history(
                 &auth_data_root,
             );
 
-            if actual_hash_block_commitments == hash_block_commitments {
+            if actual_hash_block_commitments.matches_on_network(
+                network,
+                hash_block_commitments,
+                &auth_data_root,
+            ) {
                 Ok(())
             } else {
                 Err(ValidateContextError::InvalidBlockCommitment(

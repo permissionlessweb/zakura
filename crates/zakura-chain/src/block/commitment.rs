@@ -340,6 +340,29 @@ impl ChainHistoryBlockTxAuthCommitmentHash {
             .expect("32 byte array");
         Self(hash_block_commitments)
     }
+
+    /// ClT0 leaves the Heartwood/NU6 activation block's commitment as reserved
+    /// zeros, then hashes those zeros (not the MMR leaf we built) as
+    /// `hashLightClientRoot` on the next block. Official Zebra never sees this
+    /// (checkpoints). On custom testnets, accept either parent root.
+    pub fn matches_on_network(
+        &self,
+        network: &Network,
+        expected_from_parent_tree: Self,
+        auth_data_root: &AuthDataRoot,
+    ) -> bool {
+        if *self == expected_from_parent_tree {
+            return true;
+        }
+        if !custom_testnet_accepts_reserved_chain_history(network) {
+            return false;
+        }
+        let via_reserved = Self::from_commitments(
+            &CHAIN_HISTORY_ACTIVATION_RESERVED.into(),
+            auth_data_root,
+        );
+        *self == via_reserved
+    }
 }
 
 impl ToHex for &ChainHistoryBlockTxAuthCommitmentHash {
