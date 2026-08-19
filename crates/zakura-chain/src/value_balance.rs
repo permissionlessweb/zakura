@@ -3,6 +3,7 @@
 use crate::amount::{self, Amount, Constraint, NegativeAllowed, NonNegative};
 
 use core::fmt;
+use std::ops::Neg;
 
 #[cfg(any(test, feature = "proptest-impl"))]
 use std::{borrow::Borrow, collections::HashMap};
@@ -357,6 +358,38 @@ impl ValueBalance<NonNegative> {
         chain_value_pool = (chain_value_pool + chain_value_pool_change)?;
 
         chain_value_pool.constrain()
+    }
+
+    /// If applying `change` would drive `staking_unbonded` negative, debit
+    /// `staking_bonded` instead.
+    ///
+    /// Season 1 moves principal bonded → unbonded on `BeginDelegationUnbonding`
+    /// (not in tx remaining value). We do not yet keep a bond table, so unbond
+    /// never fills `staking_unbonded` and withdraw then underflows. This matches
+    /// the post-withdraw pool split (bonded down, unbonded 0) for a follower.
+    pub fn reroute_staking_unbonded_underflow(
+        self,
+        change: ValueBalance<NegativeAllowed>,
+    ) -> Result<ValueBalance<NegativeAllowed>, ValueBalanceError> {
+        let chain = self
+            .constrain::<NegativeAllowed>()
+            .expect("NonNegative converts to NegativeAllowed");
+        let projected_unbonded = (chain.staking_unbonded + change.staking_unbonded)
+            .map_err(StakingUnbonded)?;
+        if projected_unbonded.constrain::<NonNegative>().is_ok() {
+            return Ok(change);
+        }
+        let deficit = projected_unbonded.neg();
+        Ok(ValueBalance {
+            transparent: change.transparent,
+            sprout: change.sprout,
+            sapling: change.sapling,
+            orchard: change.orchard,
+            deferred: change.deferred,
+            ironwood: change.ironwood,
+            staking_bonded: (change.staking_bonded - deficit).map_err(StakingBonded)?,
+            staking_unbonded: (change.staking_unbonded + deficit).map_err(StakingUnbonded)?,
+        })
     }
 
     /// Create a fake value pool for testing purposes.

@@ -302,6 +302,15 @@ impl DiskWriteBatch {
                 }
             })?;
 
+        let block_value_pool_change = value_pool
+            .reroute_staking_unbonded_underflow(block_value_pool_change)
+            .map_err(|value_balance_error| ValidateContextError::AddValuePool {
+                value_balance_error,
+                chain_value_pools: Box::new(value_pool),
+                block_value_pool_change: Box::new(block_value_pool_change),
+                height: Some(finalized.height),
+            })?;
+
         let new_value_pool = value_pool
             .add_chain_value_pool_change(block_value_pool_change)
             .map_err(|value_balance_error| ValidateContextError::AddValuePool {
