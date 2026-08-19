@@ -50,3 +50,34 @@ fn custom_overlapping_activations_select_the_configured_commitment_variant() {
         Ok(Commitment::ChainHistoryBlockTxAuthCommitment(_))
     ));
 }
+
+/// ClT0 only lists `NU6 = 1`. Block 1 keeps ZIP-221 reserved zeros in the
+/// commitment field; Zakura must not recompute a NU5+ digest and reject it.
+#[test]
+fn custom_nu6_activation_accepts_reserved_zero_commitment() {
+    let clt0 = Parameters::build()
+        .with_genesis_hash("05a60a92d99d85997cce3b87616c089f6124d7342af37106edc76126334a2c38")
+        .expect("ClT0 genesis hash parses")
+        .with_activation_heights(ConfiguredActivationHeights {
+            nu6: Some(1),
+            ..Default::default()
+        })
+        .expect("NU6-only activations are valid")
+        .clear_funding_streams()
+        .to_network()
+        .expect("ClT0-shaped parameters are valid");
+    let mut header = regtest_genesis_block().header.as_ref().clone();
+    header.commitment_bytes = [0; 32].into();
+    assert_eq!(
+        validate_commitment_structure(&header, &clt0, zakura_chain::block::Height(1)),
+        Ok(Commitment::ChainHistoryActivationReserved),
+    );
+    header.commitment_bytes = [0x32; 32].into();
+    assert!(
+        matches!(
+            validate_commitment_structure(&header, &clt0, zakura_chain::block::Height(1)),
+            Ok(Commitment::ChainHistoryBlockTxAuthCommitment(_))
+        ),
+        "non-zero bytes still take the ZIP-244 path"
+    );
+}

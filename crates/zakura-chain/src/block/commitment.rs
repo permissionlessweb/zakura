@@ -101,6 +101,13 @@ pub enum Commitment {
 /// The required value of reserved `Commitment`s.
 pub const CHAIN_HISTORY_ACTIVATION_RESERVED: [u8; 32] = [0; 32];
 
+fn custom_testnet_accepts_reserved_chain_history(network: &Network) -> bool {
+    matches!(
+        network,
+        Network::Testnet(params) if !params.is_default_testnet() && !params.is_regtest()
+    )
+}
+
 impl Commitment {
     /// Returns `bytes` as the Commitment variant for `network` and `height`.
     //
@@ -139,9 +146,23 @@ impl Commitment {
                 }
             }
             (Heartwood | Canopy, _) => Ok(ChainHistoryRoot(ChainHistoryMmrRootHash(bytes))),
-            (Nu5 | Nu6 | Nu6_1 | Nu6_2 | Nu6_3 | Nu7, _) => Ok(ChainHistoryBlockTxAuthCommitment(
-                ChainHistoryBlockTxAuthCommitmentHash(bytes),
-            )),
+            (Nu5 | Nu6 | Nu6_1 | Nu6_2 | Nu6_3 | Nu7, _) => {
+                // ClT0 / other uncheckpointed custom testnets leave hashBlockCommitments
+                // as ZIP-221 reserved zeros at NU6 activation. Official Zebra never
+                // checks this (checkpoints sit past Heartwood). Zakura header-chain
+                // does, so a recomputed NU5+ digest rejects their all-zero field.
+                // Lab replica only: treat reserved zeros as Heartwood activation
+                // reserved. Non-zero bytes still take the ZIP-244 path.
+                if custom_testnet_accepts_reserved_chain_history(network)
+                    && bytes == CHAIN_HISTORY_ACTIVATION_RESERVED
+                {
+                    Ok(ChainHistoryActivationReserved)
+                } else {
+                    Ok(ChainHistoryBlockTxAuthCommitment(
+                        ChainHistoryBlockTxAuthCommitmentHash(bytes),
+                    ))
+                }
+            }
 
             #[cfg(zcash_unstable = "zfuture")]
             (ZFuture, _) => Ok(ChainHistoryBlockTxAuthCommitment(
