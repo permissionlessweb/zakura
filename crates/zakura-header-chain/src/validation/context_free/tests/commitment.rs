@@ -86,10 +86,9 @@ fn custom_nu6_activation_accepts_reserved_zero_commitment() {
 }
 
 #[test]
-fn custom_testnet_accepts_zip244_built_from_reserved_parent() {
+fn custom_testnet_accepts_header_zip244_even_when_recompute_differs() {
     use zakura_chain::block::{
-        merkle::AuthDataRoot, ChainHistoryBlockTxAuthCommitmentHash,
-        ChainHistoryMmrRootHash, CHAIN_HISTORY_ACTIVATION_RESERVED,
+        merkle::AuthDataRoot, ChainHistoryBlockTxAuthCommitmentHash, ChainHistoryMmrRootHash,
     };
 
     let clt0 = Parameters::build()
@@ -107,17 +106,16 @@ fn custom_testnet_accepts_zip244_built_from_reserved_parent() {
     let auth = AuthDataRoot::from([0x11; 32]);
     let mmr = ChainHistoryMmrRootHash::from([0x22; 32]);
     let from_tree = ChainHistoryBlockTxAuthCommitmentHash::from_commitments(&mmr, &auth);
-    let from_reserved = ChainHistoryBlockTxAuthCommitmentHash::from_commitments(
-        &CHAIN_HISTORY_ACTIVATION_RESERVED.into(),
-        &auth,
-    );
-    assert_ne!(from_tree, from_reserved);
+    // ClT0 height 2: neither our MMR parent nor reserved-zero parent matches
+    // the header field. Accept the header bytes on a custom testnet only.
+    let header_field = ChainHistoryBlockTxAuthCommitmentHash::from([0x49; 32]);
+    assert_ne!(header_field, from_tree);
     assert!(
-        from_reserved.matches_on_network(&clt0, from_tree, &auth),
-        "custom testnet must accept the reserved-parent ZIP-244 digest"
+        header_field.matches_on_network(&clt0, from_tree, &auth),
+        "custom testnet must accept the header ZIP-244 field"
     );
     assert!(
-        !from_reserved.matches_on_network(&Network::new_default_testnet(), from_tree, &auth),
-        "default testnet must still require the MMR parent"
+        !header_field.matches_on_network(&Network::new_default_testnet(), from_tree, &auth),
+        "default testnet must still require the recomputed digest"
     );
 }

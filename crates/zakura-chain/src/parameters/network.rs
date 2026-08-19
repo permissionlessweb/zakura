@@ -206,6 +206,18 @@ impl Network {
         }
     }
 
+    /// Configured Testnet that is neither the public Testnet nor Regtest.
+    ///
+    /// ClT0 and other lab replicas use this to relax checks official Zebra never
+    /// applies (mandatory checkpoints sit past those heights). Mainnet, default
+    /// Testnet, and Regtest stay spec-exact.
+    pub fn is_custom_testnet(&self) -> bool {
+        matches!(
+            self,
+            Self::Testnet(params) if !params.is_default_testnet() && !params.is_regtest()
+        )
+    }
+
     /// Returns the [`NetworkKind`] for this network.
     pub fn kind(&self) -> NetworkKind {
         match self {

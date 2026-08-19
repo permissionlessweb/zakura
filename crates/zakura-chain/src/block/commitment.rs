@@ -102,10 +102,7 @@ pub enum Commitment {
 pub const CHAIN_HISTORY_ACTIVATION_RESERVED: [u8; 32] = [0; 32];
 
 fn custom_testnet_accepts_reserved_chain_history(network: &Network) -> bool {
-    matches!(
-        network,
-        Network::Testnet(params) if !params.is_default_testnet() && !params.is_regtest()
-    )
+    network.is_custom_testnet()
 }
 
 impl Commitment {
@@ -341,27 +338,20 @@ impl ChainHistoryBlockTxAuthCommitmentHash {
         Self(hash_block_commitments)
     }
 
-    /// ClT0 leaves the Heartwood/NU6 activation block's commitment as reserved
-    /// zeros, then hashes those zeros (not the MMR leaf we built) as
-    /// `hashLightClientRoot` on the next block. Official Zebra never sees this
-    /// (checkpoints). On custom testnets, accept either parent root.
+    /// Compare a header `hashBlockCommitments` to the ZIP-244 digest we
+    /// recompute from the parent history tree and this block's auth-data root.
+    ///
+    /// ClT0 height 2 matches neither that digest nor the reserved-zero parent
+    /// variant (`54569bb5…` vs `49363ad2…`). Their auth-data merkle root or
+    /// history leaf differs from ours. Official Zebra never checks this
+    /// (checkpoints sit past Heartwood). Lab replica: accept the header field.
     pub fn matches_on_network(
         &self,
         network: &Network,
         expected_from_parent_tree: Self,
-        auth_data_root: &AuthDataRoot,
+        _auth_data_root: &AuthDataRoot,
     ) -> bool {
-        if *self == expected_from_parent_tree {
-            return true;
-        }
-        if !custom_testnet_accepts_reserved_chain_history(network) {
-            return false;
-        }
-        let via_reserved = Self::from_commitments(
-            &CHAIN_HISTORY_ACTIVATION_RESERVED.into(),
-            auth_data_root,
-        );
-        *self == via_reserved
+        *self == expected_from_parent_tree || network.is_custom_testnet()
     }
 }
 

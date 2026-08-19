@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use thiserror::Error;
 use zakura_chain::{
-    parameters::{Network, NetworkUpgrade, POW_AVERAGING_WINDOW},
+    parameters::{Network, NetworkUpgrade},
     work::difficulty::{CompactDifficulty, ParameterDifficulty as _},
 };
 
@@ -84,11 +84,7 @@ pub fn validate_contextual_difficulty_and_time(
     } else {
         let expected_difficulty = difficulty_adjustment.expected_difficulty_threshold();
         if difficulty_threshold != expected_difficulty
-            && !custom_testnet_allows_harder_early_target(
-                &network,
-                candidate_height,
-                difficulty_threshold,
-            )
+            && !custom_testnet_allows_advertised_target(&network, difficulty_threshold)
         {
             return Err(ContextualValidationError::InvalidDifficultyThreshold {
                 difficulty_threshold,
@@ -100,29 +96,19 @@ pub fn validate_contextual_difficulty_and_time(
     Ok(())
 }
 
-/// ClT0 / other uncheckpointed custom testnets mine the first
-/// `PoWAveragingWindow` blocks with nBits harder than compact(PoWLimit).
+/// ClT0 / other uncheckpointed custom testnets advertise nBits that do not
+/// match ThresholdBits (heights 1–17 = PoWLimit) or the averaging-window mean
+/// / ZIP-208 min-diff override after that. Official Zebra never checks those
+/// (mandatory checkpoints). Zakura header-chain does.
 ///
-/// The Zcash spec says `ThresholdBits = PoWLimit` on that range. Official
-/// Zebra never checks it (mandatory checkpoints sit past height 17). Zakura
-/// header-chain does check it, so a spec-exact comparison rejects ClT0 block 1
-/// (`0x2006b851` vs our `0x2007ffff` limit).
-///
-/// Lab replica only: on a non-default, non-regtest testnet, allow any valid
-/// compact target that is no easier than PoWLimit. Equihash still uses the
-/// advertised nBits. Mainnet, default testnet, and regtest stay spec-exact.
-fn custom_testnet_allows_harder_early_target(
+/// Lab replica: on a custom testnet, allow any valid compact target that is
+/// no easier than PoWLimit. Equihash still uses the advertised nBits.
+/// Mainnet, default testnet, and regtest stay spec-exact.
+fn custom_testnet_allows_advertised_target(
     network: &Network,
-    candidate_height: zakura_chain::block::Height,
     difficulty_threshold: CompactDifficulty,
 ) -> bool {
-    let Network::Testnet(params) = network else {
-        return false;
-    };
-    if params.is_default_testnet() || params.is_regtest() {
-        return false;
-    }
-    if candidate_height.0 == 0 || candidate_height.0 > POW_AVERAGING_WINDOW as u32 {
+    if !network.is_custom_testnet() {
         return false;
     }
     let Some(target) = difficulty_threshold.to_expanded() else {

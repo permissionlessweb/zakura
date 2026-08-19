@@ -473,8 +473,58 @@ fn custom_testnet_accepts_harder_nbits_before_averaging_window() {
         .expect("height 1 has genesis context"),
     );
     assert!(
-        matches!(result, Err(ContextualValidationError::InvalidDifficultyThreshold { .. })),
+        matches!(
+            result,
+            Err(ContextualValidationError::InvalidDifficultyThreshold { .. })
+        ),
         "default testnet still requires exact PoWLimit nBits at height 1"
+    );
+}
+
+/// After PoWAveragingWindow, ZIP-208 / mean nBits can still disagree with
+/// ClT0's advertised target. Custom testnets keep the advertised-target
+/// exception; default testnet stays exact.
+#[test]
+fn custom_testnet_accepts_harder_nbits_after_averaging_window() {
+    let custom = Parameters::build()
+        .with_genesis_hash("05a60a92d99d85997cce3b87616c089f6124d7342af37106edc76126334a2c38")
+        .expect("ClT0 genesis hash parses")
+        .to_network()
+        .expect("ClT0-shaped Parameters are a custom testnet");
+    let base = DateTime::from_timestamp(1_700_000_000, 0).expect("test timestamp is in range");
+    let limit = custom.target_difficulty_limit().to_compact();
+    let harder = compact_half_limit(&custom);
+    assert_ne!(harder, limit);
+
+    let context = vec![(limit, base); POW_AVERAGING_WINDOW + 1];
+    let time = base + Duration::seconds(75);
+    validate_contextual_difficulty_and_time(
+        harder,
+        AdjustedDifficulty::new_from_header_time(time, block::Height(17), &custom, context)
+            .expect("height 18 has complete predecessor context"),
+    )
+    .expect("custom testnet allows advertised nBits at height 18");
+
+    let default_testnet = Network::new_default_testnet();
+    let default_limit = default_testnet.target_difficulty_limit().to_compact();
+    let default_harder = compact_half_limit(&default_testnet);
+    let default_context = vec![(default_limit, base); POW_AVERAGING_WINDOW + 1];
+    let result = validate_contextual_difficulty_and_time(
+        default_harder,
+        AdjustedDifficulty::new_from_header_time(
+            time,
+            block::Height(17),
+            &default_testnet,
+            default_context,
+        )
+        .expect("height 18 has complete predecessor context"),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(ContextualValidationError::InvalidDifficultyThreshold { .. })
+        ),
+        "default testnet still requires the computed nBits at height 18"
     );
 }
 

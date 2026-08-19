@@ -91,7 +91,7 @@ static INVALID_COINBASE_TRANSCRIPT: Lazy<
 
     // Test 1: Empty transaction
     let block1 = Block {
-        header: header.into(),
+        header: header.clone().into(),
         transactions: Vec::new(),
     };
 
@@ -852,6 +852,9 @@ fn miner_fees_validation_includes_ironwood_balance() {
         .expect("failed to build configured network");
     let height = Height(1);
     let output_value = Amount::try_from(10).expect("valid test amount");
+    // Negative ironwood valueBalance increases total_output. Custom testnets
+    // use the pre-NU6 inequality, so only an over-pay proves ironwood is
+    // included (a leftover would be allowed).
     let coinbase_tx = Transaction::V6 {
         network_upgrade: NetworkUpgrade::Nu6_3,
         lock_time: LockTime::Height(Height(0)),
@@ -867,7 +870,7 @@ fn miner_fees_validation_includes_ironwood_balance() {
         }],
         sapling_shielded_data: None,
         orchard_shielded_data: None,
-        ironwood_shielded_data: Some(ironwood_shielded_data(1)),
+        ironwood_shielded_data: Some(ironwood_shielded_data(-1)),
     };
 
     assert_eq!(
@@ -889,7 +892,7 @@ fn miner_fees_validation_includes_ironwood_balance() {
             &coinbase_tx,
             height,
             Amount::zero(),
-            Amount::try_from(9).expect("valid test amount"),
+            Amount::try_from(11).expect("valid test amount"),
             DeferredPoolBalanceChange::zero(),
             &network,
         ),

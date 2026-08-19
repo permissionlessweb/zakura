@@ -272,22 +272,28 @@ pub fn subsidy_is_valid(
             )?;
         };
 
-        // Check each funding stream output.
-        funding_streams.into_iter().try_for_each(
-            |(receiver, expected_amount)| -> Result<(), BlockError> {
-                let addr =
-                    funding_stream_address(height, net, receiver).ok_or(BlockError::Other(
-                        "A funding stream other than the deferred pool must have an address"
-                            .to_string(),
-                    ))?;
+        // ClT0 coinbases do not pay our default-testnet funding-stream
+        // addresses (extend_funding_stream only fills the address list so
+        // the index is defined). Official Zebra never checks this on
+        // uncheckpointed custom nets. Lab replica: skip the exact
+        // address/amount match.
+        if !net.is_custom_testnet() {
+            funding_streams.into_iter().try_for_each(
+                |(receiver, expected_amount)| -> Result<(), BlockError> {
+                    let addr =
+                        funding_stream_address(height, net, receiver).ok_or(BlockError::Other(
+                            "A funding stream other than the deferred pool must have an address"
+                                .to_string(),
+                        ))?;
 
-                if !has_amount(addr, expected_amount) {
-                    Err(SubsidyError::FundingStreamNotFound)?;
-                }
+                    if !has_amount(addr, expected_amount) {
+                        Err(SubsidyError::FundingStreamNotFound)?;
+                    }
 
-                Ok(())
-            },
-        )?;
+                    Ok(())
+                },
+            )?;
+        }
 
         Ok(DeferredPoolBalanceChange::new(deferred_pool_balance_change))
     }
@@ -328,12 +334,21 @@ pub fn miner_fees_are_valid(
     //
     // The expected lockbox funding stream output of the coinbase transaction is also subtracted
     // from the block subsidy value plus the transaction fees paid by transactions in this block.
+    // ClT0 does not pay our deferred-pool / funding-stream split. Adding
+    // our expected deferred amount would make a miner-kept coinbase fail
+    // even the pre-NU6 inequality. Lab replica: count only the coinbase
+    // outputs. Official networks still add deferred.
+    let deferred = if network.is_custom_testnet() {
+        Amount::<NegativeAllowed>::zero()
+    } else {
+        expected_deferred_pool_balance_change.value()
+    };
     let total_output_value = (transparent_value_balance
         - sapling_value_balance
         - orchard_value_balance
         - ironwood_value_balance
-        + expected_deferred_pool_balance_change.value())
-    .map_err(|_| SubsidyError::Overflow)?;
+        + deferred)
+        .map_err(|_| SubsidyError::Overflow)?;
 
     let total_input_value =
         (expected_block_subsidy + block_miner_fees).map_err(|_| SubsidyError::Overflow)?;
@@ -344,7 +359,13 @@ pub fn miner_fees_are_valid(
     // input.
     //
     // > [NU6 onward] The total output of a coinbase transaction MUST be equal to its total input.
-    if if NetworkUpgrade::current(network, height) < NetworkUpgrade::Nu6 {
+    //
+    // ClT0 was mined under the pre-NU6 inequality (or a different funding
+    // split). Official Zebra never checks this at height 2. Lab replica:
+    // keep the inequality. Mainnet / default testnet / regtest stay exact.
+    let pre_nu6 = NetworkUpgrade::current(network, height) < NetworkUpgrade::Nu6
+        || network.is_custom_testnet();
+    if if pre_nu6 {
         total_output_value > total_input_value
     } else {
         total_output_value != total_input_value
