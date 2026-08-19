@@ -434,6 +434,50 @@ fn disabled_pow_low_target_window_does_not_calculate_expected_difficulty() {
     ));
 }
 
+/// ClT0 block 1 advertises a harder compact target than compact(PoWLimit).
+/// Custom testnets must accept that; default testnet must not.
+#[test]
+fn custom_testnet_accepts_harder_nbits_before_averaging_window() {
+    let custom = Parameters::build()
+        .with_genesis_hash("05a60a92d99d85997cce3b87616c089f6124d7342af37106edc76126334a2c38")
+        .expect("ClT0 genesis hash parses")
+        .to_network()
+        .expect("ClT0-shaped Parameters are a custom testnet");
+    assert!(!matches!(&custom, Network::Testnet(p) if p.is_default_testnet() || p.is_regtest()));
+
+    let base = DateTime::from_timestamp(1_700_000_000, 0).expect("test timestamp is in range");
+    let limit = custom.target_difficulty_limit().to_compact();
+    let harder = compact_half_limit(&custom);
+    assert_ne!(harder, limit);
+
+    let context = [(limit, base)];
+    let time = base + Duration::seconds(75);
+    validate_contextual_difficulty_and_time(
+        harder,
+        AdjustedDifficulty::new_from_header_time(time, block::Height(0), &custom, context)
+            .expect("height 1 has genesis context"),
+    )
+    .expect("custom testnet allows harder nBits at height 1");
+
+    let default_testnet = Network::new_default_testnet();
+    let default_limit = default_testnet.target_difficulty_limit().to_compact();
+    let default_harder = compact_half_limit(&default_testnet);
+    let result = validate_contextual_difficulty_and_time(
+        default_harder,
+        AdjustedDifficulty::new_from_header_time(
+            time,
+            block::Height(0),
+            &default_testnet,
+            [(default_limit, base)],
+        )
+        .expect("height 1 has genesis context"),
+    );
+    assert!(
+        matches!(result, Err(ContextualValidationError::InvalidDifficultyThreshold { .. })),
+        "default testnet still requires exact PoWLimit nBits at height 1"
+    );
+}
+
 #[derive(Clone, Copy, Debug)]
 enum SimulationTargetSamples {
     Constant,
