@@ -15,7 +15,7 @@ use zakura_chain::{
 
 use crate::{
     constants::POS_BLOCK_REWARD_ZATS,
-    service::finalized_state::disk_format::{BondKey, DelegationBond, TransactionLocation},
+    service::finalized_state::{BondKey, DelegationBond, TransactionLocation},
     ValidateContextError,
 };
 
@@ -64,21 +64,26 @@ pub fn update_chain_tip_with_delegation_bond(
             let updated = DelegationBond::new(bond.amount, bond.target_finalizer, transaction_location);
             delegation_bonds.insert(bond_key, (updated, BondStatusInChain::Unbonding));
 
-            let new_bonded = (chain_value_pools.staking_bonded_amount() - bond.amount).map_err(
-                |e| {
-                    ValidateContextError::InvalidDelegationBond(format!(
-                        "staking_bonded pool underflow when unbonding: {e:?}"
-                    ))
-                },
-            )?;
+            let new_bonded = Amount::<NonNegative>::try_from(
+                chain_value_pools.staking_bonded_amount().zatoshis()
+                    - bond.amount.zatoshis(),
+            )
+            .map_err(|e| {
+                ValidateContextError::InvalidDelegationBond(format!(
+                    "staking_bonded pool underflow when unbonding: {e:?}"
+                ))
+            })?;
             chain_value_pools.set_staking_bonded_amount(new_bonded);
 
-            let new_unbonded = (chain_value_pools.staking_unbonded_amount() + bond.amount)
-                .map_err(|e| {
-                    ValidateContextError::InvalidDelegationBond(format!(
-                        "staking_unbonded pool overflow when unbonding: {e:?}"
-                    ))
-                })?;
+            let new_unbonded = Amount::<NonNegative>::try_from(
+                chain_value_pools.staking_unbonded_amount().zatoshis()
+                    + bond.amount.zatoshis(),
+            )
+            .map_err(|e| {
+                ValidateContextError::InvalidDelegationBond(format!(
+                    "staking_unbonded pool overflow when unbonding: {e:?}"
+                ))
+            })?;
             chain_value_pools.set_staking_unbonded_amount(new_unbonded);
         }
         StakingActionKind::WithdrawDelegationBond => {
@@ -190,7 +195,7 @@ pub fn apply_pos_block_reward(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::finalized_state::disk_format::TransactionLocation;
+    use crate::service::finalized_state::TransactionLocation;
     use zakura_chain::block::Height;
 
     #[test]

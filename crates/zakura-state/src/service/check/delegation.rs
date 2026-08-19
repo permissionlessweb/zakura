@@ -7,7 +7,7 @@ use zakura_chain::transaction::StakingActionKind;
 use crate::{
     service::{
         delegation::BondStatusInChain,
-        finalized_state::{disk_format::DelegationBond, ZakuraDb},
+        finalized_state::{DelegationBond, ZakuraDb},
         non_finalized_state::Chain,
     },
     SemanticallyVerifiedBlock, ValidateContextError,

@@ -260,18 +260,16 @@ pub struct ChainInner {
 
     /// Season 1 delegation bonds (v13 `delegation_bonds`).
     pub(crate) delegation_bonds: HashMap<
-        crate::service::finalized_state::disk_format::BondKey,
+        crate::service::finalized_state::BondKey,
         (
-            crate::service::finalized_state::disk_format::DelegationBond,
+            crate::service::finalized_state::DelegationBond,
             crate::service::delegation::BondStatusInChain,
         ),
     >,
     /// Per-block pre-retarget finalizer, for tip revert.
-    bond_retargets: Vec<
-        HashMap<crate::service::finalized_state::disk_format::BondKey, [u8; 32]>,
-    >,
+    bond_retargets: Vec<HashMap<crate::service::finalized_state::BondKey, [u8; 32]>>,
     /// Per-block POS split, for tip revert.
-    bond_rewards: Vec<Vec<(crate::service::finalized_state::disk_format::BondKey, u64)>>,
+    bond_rewards: Vec<Vec<(crate::service::finalized_state::BondKey, u64)>>,
 }
 
 impl Chain {

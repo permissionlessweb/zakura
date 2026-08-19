@@ -108,8 +108,8 @@ pub use commitment_aux::{
 pub use disk_db::{DiskDb, DiskWriteBatch, ReadDisk, WriteDisk};
 #[allow(unused_imports)]
 pub use disk_format::{
-    FallibleDiskValue, FromDisk, IntoDisk, OutputLocation, RawBytes, TransactionIndex,
-    TransactionLocation, MAX_ON_DISK_HEIGHT,
+    BondKey, BondStatus, DelegationBond, FallibleDiskValue, FromDisk, IntoDisk, OutputLocation,
+    RawBytes, TransactionIndex, TransactionLocation, MAX_ON_DISK_HEIGHT,
 };
 #[cfg(feature = "internal-bench")]
 pub use header_chain::{
