@@ -696,9 +696,9 @@ fn combine_txid_digests(
     if let Some(ironwood) = ironwood {
         h.update(ironwood);
     }
-    // VCrosslink txid, sighash, and auth trees all include the
-    // `ZTxCrosslinkHash` node (empty personalization when there is no staking
-    // action). Omitting it on None left ClT0 height 36's merkle root unmatched.
+    // VCrosslink: append `ZTxCrosslinkHash` only when a staking action is
+    // present (crosslink_monolith v13 `to_hash`). Empty personalization on
+    // None is not how Season 1 hashes.
     if let Some(crosslink) = crosslink {
         h.update(crosslink);
     }
@@ -706,25 +706,18 @@ fn combine_txid_digests(
     h.finalize()
 }
 
-/// `ZTxCrosslinkHash` of kind ‖ val LE64 ‖ target ‖ source. Names are not
-/// committed (ShieldedLabs `StakingAction::hash_to_state`).
+/// `ZTxCrosslinkHash` via v13 `StakingAction::hash_to_state`.
 fn hash_staking_action(action: &StakingAction) -> [u8; 32] {
+    let preimage = action
+        .txid_preimage()
+        .expect("Null staking is not hashed; caller maps None");
     let mut h = hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION);
-    h.update(&[u8::from(action.kind)]);
-    h.update(&action.val.to_le_bytes());
-    h.update(&action.target);
-    h.update(&action.source);
+    h.update(&preimage);
     finalize_node_hash(h)
 }
 
-fn hash_crosslink_auth(staking: Option<&StakingAction>) -> [u8; 32] {
-    match staking {
-        Some(action) => hash_staking_action(action),
-        None => {
-            let h = hasher(ZCASH_CROSSLINK_HASH_PERSONALIZATION);
-            finalize_node_hash(h)
-        }
-    }
+fn hash_crosslink_auth(staking: Option<&StakingAction>) -> Option<[u8; 32]> {
+    staking.map(hash_staking_action)
 }
 
 fn txid_inner(parts: &Zip244Parts) -> Hash {
@@ -738,10 +731,11 @@ fn txid_inner(parts: &Zip244Parts) -> Hash {
         .version
         .has_ironwood()
         .then(|| hash_bundle_txid(parts.ironwood, BundleCommitmentFormat::IronwoodV6));
-    let crosslink = parts
-        .version
-        .has_crosslink()
-        .then(|| hash_crosslink_auth(parts.staking));
+    let crosslink = if parts.version.has_crosslink() {
+        hash_crosslink_auth(parts.staking)
+    } else {
+        None
+    };
 
     Hash(
         combine_txid_digests(
@@ -861,10 +855,11 @@ fn auth_digest_inner(parts: &Zip244Parts) -> AuthDigest {
         .version
         .has_ironwood()
         .then(|| hash_bundle_auth(parts.ironwood, BundleCommitmentFormat::IronwoodV6));
-    let crosslink = parts
-        .version
-        .has_crosslink()
-        .then(|| hash_crosslink_auth(parts.staking));
+    let crosslink = if parts.version.has_crosslink() {
+        hash_crosslink_auth(parts.staking)
+    } else {
+        None
+    };
 
     let mut personal = [0u8; 16];
     personal[..12].copy_from_slice(ZCASH_AUTH_PERSONALIZATION_PREFIX);
@@ -965,10 +960,11 @@ impl Zip244SighashCache {
                 .version
                 .has_ironwood()
                 .then(|| hash_bundle_txid(parts.ironwood, BundleCommitmentFormat::IronwoodV6)),
-            crosslink: parts
-                .version
-                .has_crosslink()
-                .then(|| hash_crosslink_auth(parts.staking)),
+            crosslink: if parts.version.has_crosslink() {
+                hash_crosslink_auth(parts.staking)
+            } else {
+                None
+            },
         })
     }
 

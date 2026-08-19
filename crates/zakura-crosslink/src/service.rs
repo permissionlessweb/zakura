@@ -204,11 +204,11 @@ fn parse_staking_cmd(
         )));
     }
     let kind = match &cmd[..3] {
-        b"ADD" => StakingActionKind::Add,
-        b"SUB" => StakingActionKind::Sub,
-        b"CLR" => StakingActionKind::Clear,
-        b"MOV" => StakingActionKind::Move,
-        b"MCL" => StakingActionKind::MoveClear,
+        b"ADD" => StakingActionKind::CreateNewDelegationBond,
+        b"SUB" => StakingActionKind::BeginDelegationUnbonding,
+        b"CLR" => StakingActionKind::WithdrawDelegationBond,
+        b"MOV" => StakingActionKind::RetargetDelegationBond,
+        b"MCL" => StakingActionKind::RetargetDelegationBond,
         _ => {
             return Err(TFLServiceError::Misc(format!(
                 "Roster command invalid: unrecognized instruction:\nCMD: \"{cmd_str}\""
@@ -232,20 +232,20 @@ fn parse_staking_cmd(
     } else {
         rng_keys_from_bytes(source_name.as_bytes()).2
     };
-    if matches!(kind, StakingActionKind::Move | StakingActionKind::MoveClear) && source_name.is_empty()
-    {
+    if kind == StakingActionKind::RetargetDelegationBond && source_name.is_empty() {
         return Err(TFLServiceError::Misc(format!(
             "Roster command invalid: can't move from non-present finalizer\nCMD: \"{cmd_str}\""
         )));
     }
-    Ok(Some(StakingAction {
+    let mut action = StakingAction {
         kind,
-        val,
-        target,
-        source,
-        insecure_target_name: target_name,
-        insecure_source_name: source_name,
-    }))
+        amount_zats: val,
+        ..StakingAction::default()
+    };
+    action.arg32_2 = target;
+    action.arg32_0 = source;
+    let _ = target_name;
+    Ok(Some(action))
 }
 
 fn apply_staking_action(
@@ -253,37 +253,37 @@ fn apply_staking_action(
     action: &zakura_chain::transaction::StakingAction,
 ) {
     use zakura_chain::transaction::StakingActionKind;
-    let (has_add, sub_key, is_clear) = match action.kind {
-        StakingActionKind::Add => (true, None, false),
-        StakingActionKind::Sub => (false, Some(action.target), false),
-        StakingActionKind::Clear => (false, Some(action.target), true),
-        StakingActionKind::Move => (true, Some(action.source), false),
-        StakingActionKind::MoveClear => (true, Some(action.source), true),
-    };
-    let mut amount = action.val;
-    if let Some(key) = sub_key {
-        let Some(power) = roster.get_mut(&key) else {
-            warn!("staking cmd: subtract target not on roster");
-            return;
-        };
-        if *power < action.val && !is_clear {
-            warn!("staking cmd: subtract exceeds voting power");
-            return;
+    let amount = action.amount_zats;
+    match action.kind {
+        StakingActionKind::CreateNewDelegationBond => {
+            *roster.entry(action.arg32_2).or_insert(0) += amount;
         }
-        if is_clear {
-            if *power < action.val {
-                warn!("staking cmd: clear target above current power");
+        StakingActionKind::BeginDelegationUnbonding | StakingActionKind::WithdrawDelegationBond => {
+            let key = action.arg32_0;
+            let Some(power) = roster.get_mut(&key) else {
+                warn!("staking cmd: subtract target not on roster");
                 return;
+            };
+            *power = power.saturating_sub(amount);
+            if *power == 0 {
+                roster.remove(&key);
             }
-            amount = *power - action.val;
         }
-        *power = power.saturating_sub(amount);
-        if *power == 0 {
-            roster.remove(&key);
+        StakingActionKind::RetargetDelegationBond => {
+            let from = action.arg32_0;
+            let to = action.arg32_2;
+            if let Some(power) = roster.get_mut(&from) {
+                *power = power.saturating_sub(amount);
+                if *power == 0 {
+                    roster.remove(&from);
+                }
+            }
+            *roster.entry(to).or_insert(0) += amount;
         }
-    }
-    if has_add {
-        *roster.entry(action.target).or_insert(0) += amount;
+        StakingActionKind::Null
+        | StakingActionKind::RegisterFinalizer
+        | StakingActionKind::ConvertFinalizerRewardToDelegationBond
+        | StakingActionKind::UpdateFinalizerKey => {}
     }
 }
 
