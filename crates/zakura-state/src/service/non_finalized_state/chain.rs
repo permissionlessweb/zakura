@@ -2571,7 +2571,7 @@ impl UpdateWith<(ValueBalance<NegativeAllowed>, Height, usize)> for Chain {
         &mut self,
         (block_value_pool_change, height, size): &(ValueBalance<NegativeAllowed>, Height, usize),
     ) -> Result<(), ValidateContextError> {
-        let block_value_pool_change = self
+        let rerouted_change = self
             .chain_value_pools
             .reroute_staking_unbonded_underflow(*block_value_pool_change)
             .map_err(|value_balance_error| ValidateContextError::AddValuePool {
@@ -2582,7 +2582,7 @@ impl UpdateWith<(ValueBalance<NegativeAllowed>, Height, usize)> for Chain {
             })?;
         match self
             .chain_value_pools
-            .add_chain_value_pool_change(block_value_pool_change)
+            .add_chain_value_pool_change(rerouted_change)
         {
             Ok(chain_value_pools) => {
                 self.chain_value_pools = chain_value_pools;
@@ -2592,7 +2592,7 @@ impl UpdateWith<(ValueBalance<NegativeAllowed>, Height, usize)> for Chain {
             Err(value_balance_error) => Err(ValidateContextError::AddValuePool {
                 value_balance_error,
                 chain_value_pools: Box::new(self.chain_value_pools),
-                block_value_pool_change: Box::new(*block_value_pool_change),
+                block_value_pool_change: Box::new(rerouted_change),
                 height: Some(*height),
             })?,
         };
