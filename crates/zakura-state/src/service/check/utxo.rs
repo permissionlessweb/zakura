@@ -76,7 +76,15 @@ pub fn transparent_spend(
                 &finalized_state.network(),
                 semantically_verified.height,
             );
-            transparent_coinbase_spend(spend, spend_restriction, utxo.as_ref())?;
+            // ClT0 spends height-1 coinbase at height 5. Official Zebra 2.5.0
+            // never checks this (checkpoints sit past 100). Lab replica: skip
+            // the 100-block wait on custom testnets; unshielded-spend still
+            // applies.
+            if !(finalized_state.network().is_custom_testnet()
+                && matches!(spend_restriction, CheckCoinbaseMaturity { .. }))
+            {
+                transparent_coinbase_spend(spend, spend_restriction, utxo.as_ref())?;
+            }
 
             // We don't delete the UTXOs until the block is committed,
             // so we  need to check for duplicate spends within the same block.

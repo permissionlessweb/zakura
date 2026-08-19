@@ -696,8 +696,9 @@ fn combine_txid_digests(
     if let Some(ironwood) = ironwood {
         h.update(ironwood);
     }
-    // ShieldedLabs only appends the crosslink node when a staking action is
-    // present (not the empty personalization). Auth digest always includes it.
+    // VCrosslink txid, sighash, and auth trees all include the
+    // `ZTxCrosslinkHash` node (empty personalization when there is no staking
+    // action). Omitting it on None left ClT0 height 36's merkle root unmatched.
     if let Some(crosslink) = crosslink {
         h.update(crosslink);
     }
@@ -714,10 +715,6 @@ fn hash_staking_action(action: &StakingAction) -> [u8; 32] {
     h.update(&action.target);
     h.update(&action.source);
     finalize_node_hash(h)
-}
-
-fn hash_crosslink_txid(staking: Option<&StakingAction>) -> Option<[u8; 32]> {
-    staking.map(hash_staking_action)
 }
 
 fn hash_crosslink_auth(staking: Option<&StakingAction>) -> [u8; 32] {
@@ -744,8 +741,7 @@ fn txid_inner(parts: &Zip244Parts) -> Hash {
     let crosslink = parts
         .version
         .has_crosslink()
-        .then(|| hash_crosslink_txid(parts.staking))
-        .flatten();
+        .then(|| hash_crosslink_auth(parts.staking));
 
     Hash(
         combine_txid_digests(
@@ -972,8 +968,7 @@ impl Zip244SighashCache {
             crosslink: parts
                 .version
                 .has_crosslink()
-                .then(|| hash_crosslink_txid(parts.staking))
-                .flatten(),
+                .then(|| hash_crosslink_auth(parts.staking)),
         })
     }
 

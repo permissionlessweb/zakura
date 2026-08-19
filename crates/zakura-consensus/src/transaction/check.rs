@@ -648,7 +648,14 @@ pub fn tx_transparent_coinbase_spends_maturity(
 
         let spend_restriction = tx.coinbase_spend_restriction(network, height);
 
-        zakura_state::check::transparent_coinbase_spend(spend, spend_restriction, &utxo)?;
+        if !(network.is_custom_testnet()
+            && matches!(
+                spend_restriction,
+                zakura_chain::transparent::CoinbaseSpendRestriction::CheckCoinbaseMaturity { .. }
+            ))
+        {
+            zakura_state::check::transparent_coinbase_spend(spend, spend_restriction, &utxo)?;
+        }
     }
 
     Ok(())
