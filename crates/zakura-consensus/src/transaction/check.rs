@@ -129,6 +129,16 @@ pub fn lock_time_has_passed(
 ///
 /// This check counts both `Coinbase` and `PrevOut` transparent inputs.
 pub fn has_inputs_and_outputs(tx: &Transaction) -> Result<(), TransactionError> {
+    // Season 1 (crosslink_monolith v13): a VCrosslink tx with a staking
+    // action is allowed with no transparent/shielded I/O.
+    if let Transaction::VCrosslink {
+        staking_action: Some(_),
+        ..
+    } = tx
+    {
+        return Ok(());
+    }
+
     if !tx.has_transparent_or_shielded_inputs() {
         Err(TransactionError::NoInputs)
     } else if !tx.has_transparent_or_shielded_outputs() {
