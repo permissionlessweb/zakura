@@ -28,10 +28,10 @@ use zakura_header_chain::{
 use super::FallibleDiskValue;
 
 // Stock Equihash NU5 headers are ~1.5 KiB. ClT0/Season 1 appends a fat
-// pointer (44-byte vote + u16 sig count + 96 bytes per finalizer). A 100-wide
-// roster is ~11 KiB including the Equihash solution. Height 334 serialized
-// to 2109 bytes and exceeded the old 2 KiB disk bound.
-const MAX_HEADER_BYTES: usize = 16 * 1024;
+// pointer (44-byte vote + u16 sig count + 96 bytes per finalizer). Height 334
+// was 2109 bytes (old 2 KiB bound). 16 KiB holds ~150 signatures; a growing
+// BFT roster can exceed that. 1 MiB is ~10k signatures — larger than ClT0.
+const MAX_HEADER_BYTES: usize = 1024 * 1024;
 const MAX_RULE_ID_BYTES: usize = 128;
 const MAX_AUX_DELIVERY_IDS: usize = zakura_chain::parameters::MAX_NON_FINALIZED_CHAIN_FORKS * 16;
 

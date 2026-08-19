@@ -392,6 +392,79 @@ impl ValueBalance<NonNegative> {
         })
     }
 
+    /// Season 1 mints 5 ZEC into `staking_bonded` on every non-genesis block
+    /// that still has a bonded pool after applying the block's tx deltas.
+    ///
+    /// v13 does this via `update_bonds_with_pos_issuance`. We have no bond
+    /// table; minting into the pool is enough for a follower so later
+    /// withdraws do not underflow `StakingBonded`.
+    pub const SEASON1_POS_BLOCK_REWARD_ZATS: i64 = 500_000_000;
+
+    /// Reroute unbonded underflow, clamp any remaining staking underflow to
+    /// drain the pool to zero (never `AddValuePool` on staking), then mint
+    /// the Season 1 POS block reward when height > 0 and bonded stays > 0.
+    pub fn follower_staking_chain_value_pool_change(
+        self,
+        change: ValueBalance<NegativeAllowed>,
+        height: u32,
+    ) -> Result<ValueBalance<NegativeAllowed>, ValueBalanceError> {
+        let mut change = self.reroute_staking_unbonded_underflow(change)?;
+        change = self.clamp_staking_pool_underflow(change)?;
+        self.with_season1_pos_issuance(change, height)
+    }
+
+    /// If applying `change` would still drive a staking pool negative, drain
+    /// that pool to zero instead of failing the block.
+    fn clamp_staking_pool_underflow(
+        self,
+        mut change: ValueBalance<NegativeAllowed>,
+    ) -> Result<ValueBalance<NegativeAllowed>, ValueBalanceError> {
+        let chain = self
+            .constrain::<NegativeAllowed>()
+            .expect("NonNegative converts to NegativeAllowed");
+
+        let projected_bonded =
+            (chain.staking_bonded + change.staking_bonded).map_err(StakingBonded)?;
+        if projected_bonded.constrain::<NonNegative>().is_err() {
+            change.staking_bonded = chain.staking_bonded.neg();
+        }
+
+        let projected_unbonded =
+            (chain.staking_unbonded + change.staking_unbonded).map_err(StakingUnbonded)?;
+        if projected_unbonded.constrain::<NonNegative>().is_err() {
+            change.staking_unbonded = chain.staking_unbonded.neg();
+        }
+
+        Ok(change)
+    }
+
+    fn with_season1_pos_issuance(
+        self,
+        change: ValueBalance<NegativeAllowed>,
+        height: u32,
+    ) -> Result<ValueBalance<NegativeAllowed>, ValueBalanceError> {
+        if height == 0 {
+            return Ok(change);
+        }
+        let chain = self
+            .constrain::<NegativeAllowed>()
+            .expect("NonNegative converts to NegativeAllowed");
+        let projected_bonded =
+            (chain.staking_bonded + change.staking_bonded).map_err(StakingBonded)?;
+        let Some(bonded) = projected_bonded.constrain::<NonNegative>().ok() else {
+            return Ok(change);
+        };
+        if bonded.zatoshis() == 0 {
+            return Ok(change);
+        }
+        let reward = Amount::<NegativeAllowed>::try_from(Self::SEASON1_POS_BLOCK_REWARD_ZATS)
+            .expect("POS reward is in range");
+        Ok(ValueBalance {
+            staking_bonded: (change.staking_bonded + reward).map_err(StakingBonded)?,
+            ..change
+        })
+    }
+
     /// Create a fake value pool for testing purposes.
     ///
     /// The resulting [`ValueBalance`] will have half of the MAX_MONEY amount on each pool.
