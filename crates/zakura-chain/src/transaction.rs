@@ -1852,8 +1852,34 @@ impl Transaction {
             return Err(crate::Error::InvalidConsensusBranchId);
         };
 
+        // Stock librustzcash cannot parse v7. Shielded proofs and transparent
+        // scripts are the V5 body; ZIP-244 v7 identity stays native. Season 1
+        // (crosslink_monolith v13) hashes staking separately.
+        let bytes = match self {
+            Transaction::VCrosslink {
+                network_upgrade,
+                lock_time,
+                expiry_height,
+                inputs,
+                outputs,
+                sapling_shielded_data,
+                orchard_shielded_data,
+                staking_action: _,
+            } => Transaction::V5 {
+                network_upgrade: *network_upgrade,
+                lock_time: *lock_time,
+                expiry_height: *expiry_height,
+                inputs: inputs.clone(),
+                outputs: outputs.clone(),
+                sapling_shielded_data: sapling_shielded_data.clone(),
+                orchard_shielded_data: orchard_shielded_data.clone(),
+            }
+            .zcash_serialize_to_vec()?,
+            _ => self.zcash_serialize_to_vec()?,
+        };
+
         Ok(zcash_primitives::transaction::Transaction::read(
-            &self.zcash_serialize_to_vec()?[..],
+            &bytes[..],
             branch_id,
         )?)
     }

@@ -1075,6 +1075,9 @@ where
             //
             // Note: Here we verify the transaction version number of the above rule, the group
             // id is checked in zakura-chain crate, in the transaction serialize.
+            //
+            // VCrosslink (version 7) is verified on this same path. ClT0/Season 1
+            // activates NU6 at height 1 and carries v7 staking txs under that upgrade.
             NetworkUpgrade::Nu5
             | NetworkUpgrade::Nu6
             | NetworkUpgrade::Nu6_1
