@@ -604,6 +604,10 @@ where
             Transaction::V5 {
                 sapling_shielded_data,
                 ..
+            }
+            | Transaction::VCrosslink {
+                sapling_shielded_data,
+                ..
             } => *sapling_shielded_data = None,
             Transaction::V6 {
                 sapling_shielded_data,
@@ -788,6 +792,7 @@ impl Arbitrary for Header {
                         difficulty_threshold,
                         nonce,
                         solution,
+                        fat_pointer_to_bft_block: Default::default(),
                     }
                 },
             )

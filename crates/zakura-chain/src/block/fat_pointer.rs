@@ -1,7 +1,7 @@
 //! Crosslink fat-pointer types (byte-compatible with zebra-crosslink / terp-rs LC).
 //!
-//! These types are *not* part of the stock PoW header wire format. Feature-off
-//! `zakurad` still serializes [`super::Header`] exactly as today.
+//! Version-4 headers (stock Zcash / mainnet) do not include this field on the
+//! wire. Logical version ≥ 5 (Crosslink prototype nets) appends it after Equihash.
 
 use std::io::{Read, Write};
 
@@ -131,6 +131,40 @@ mod tests {
         let back = FatPointerToBftBlock::zcash_deserialize(&buf[..]).unwrap();
         assert_eq!(fp, back);
         assert!(!back.has_signatures());
+    }
+
+    #[test]
+    fn v5_header_appends_fat_pointer_v4_does_not() {
+        use crate::block::Header;
+        use crate::serialization::{ZcashDeserialize, ZcashSerialize};
+        use crate::work::equihash::Solution;
+        use chrono::TimeZone;
+
+        let mut h = Header {
+            version: 4,
+            previous_block_hash: crate::block::Hash([0; 32]),
+            merkle_root: crate::block::merkle::Root([0; 32]),
+            commitment_bytes: [0; 32].into(),
+            time: chrono::Utc.timestamp_opt(1, 0).single().unwrap(),
+            difficulty_threshold: crate::work::difficulty::CompactDifficulty(0x1d00_ffff),
+            nonce: [0; 32].into(),
+            solution: Solution::for_proposal(),
+            fat_pointer_to_bft_block: FatPointerToBftBlock::null(),
+        };
+        let v4 = h.zcash_serialize_to_vec().unwrap();
+        h.version = 5;
+        h.fat_pointer_to_bft_block = FatPointerToBftBlock {
+            vote_for_block_without_finalizer_public_key: [3u8; 44],
+            signatures: vec![FatPointerSignature {
+                public_key: [4u8; 32],
+                vote_signature: [5u8; 64],
+            }],
+        };
+        let v5 = h.zcash_serialize_to_vec().unwrap();
+        assert!(v5.len() > v4.len(), "v5 must append the fat pointer");
+        let back = Header::zcash_deserialize(&v5[..]).unwrap();
+        assert_eq!(back.version, 5);
+        assert_eq!(back.fat_pointer_to_bft_block, h.fat_pointer_to_bft_block);
     }
 
     #[test]

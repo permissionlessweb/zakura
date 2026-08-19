@@ -208,7 +208,7 @@ fn full_commit_ensures_exact_node_body_and_independent_selection() {
     assert_eq!(store.metadata.frontiers.header_best, header_best);
     assert_eq!(store.metadata.frontiers.verified_best, anchor);
 
-    let mut accepted_header = *regtest_genesis_block().header;
+    let mut accepted_header = regtest_genesis_block().header.as_ref().clone();
     accepted_header.previous_block_hash = anchor.hash;
     accepted_header.difficulty_threshold = easy;
     accepted_header.time += chrono::Duration::seconds(1);
@@ -287,7 +287,7 @@ fn full_state_insertion_rejects_a_contextually_invalid_header() {
         .graph
         .header_node(anchor.hash)
         .expect("the finalized anchor exists");
-    let mut header = *regtest_genesis_block().header;
+    let mut header = regtest_genesis_block().header.as_ref().clone();
     header.previous_block_hash = anchor.hash;
     header.difficulty_threshold = parent.header.difficulty_threshold;
     header.time = parent.header.time;

@@ -49,7 +49,7 @@ use crate::{
         queued_blocks::{QueuedCheckpointVerified, QueuedSemanticallyVerified},
         ChainTipBlock, ChainTipSender, InvalidateError, ReconsiderError,
     },
-    CheckpointVerifiedBlock, CommitBlockError, CommitCheckpointVerifiedError,
+    BoxError, CheckpointVerifiedBlock, CommitBlockError, CommitCheckpointVerifiedError,
     SemanticallyVerifiedBlock, ValidateContextError,
 };
 
@@ -1547,6 +1547,11 @@ pub enum NonFinalizedWriteMessage {
     /// A newly downloaded and semantically verified block prepared for
     /// contextual validation and insertion into the non-finalized state.
     Commit(QueuedSemanticallyVerified),
+    /// Crosslink has finalized this PoW hash; commit its ancestors to disk.
+    CrosslinkFinalized(
+        block::Hash,
+        tokio::sync::oneshot::Sender<Result<block::Hash, BoxError>>,
+    ),
     /// The hash of a block that should be invalidated and removed from
     /// the non-finalized state, if present.
     Invalidate {
@@ -2438,6 +2443,61 @@ impl WriteBlockWorkerTask {
                     None
                 }
                 NonFinalizedWriteMessage::Commit(queued_child) => Some(queued_child),
+                NonFinalizedWriteMessage::CrosslinkFinalized(hash, rsp_tx) => {
+                    if let Some(newly_finalized) = non_finalized_state.crosslink_finalize(hash) {
+                        update_latest_chain_channels(
+                            non_finalized_state,
+                            chain_tip_sender,
+                            non_finalized_state_sender,
+                            backup_dir_path.as_deref(),
+                        );
+                        tracing::info!(
+                            ?hash,
+                            count = newly_finalized.len(),
+                            "crosslink finalize: committing ancestors"
+                        );
+                        let mut commit_err: Option<BoxError> = None;
+                        for _ in 0..newly_finalized.len() {
+                            let commit_result = if let Some(writer) = header_chain.as_ref() {
+                                commit_contextual_finalization(
+                                    writer,
+                                    finalized_state,
+                                    non_finalized_state,
+                                    None,
+                                )
+                            } else {
+                                let finalizable = non_finalized_state.finalize();
+                                finalized_state.commit_finalized_direct(
+                                    finalizable,
+                                    None,
+                                    None,
+                                    "commit Crosslink-finalized block",
+                                )
+                            };
+                            if let Err(error) = commit_result {
+                                tracing::error!(?error, "crosslink finalize commit failed");
+                                commit_err = Some(error.into());
+                                break;
+                            }
+                        }
+                        if let Some(error) = commit_err {
+                            let _ = rsp_tx.send(Err(error));
+                        } else {
+                            update_latest_chain_channels(
+                                non_finalized_state,
+                                chain_tip_sender,
+                                non_finalized_state_sender,
+                                backup_dir_path.as_deref(),
+                            );
+                            let _ = rsp_tx.send(Ok(hash));
+                        }
+                    } else if finalized_state.db.block_header(hash.into()).is_some() {
+                        let _ = rsp_tx.send(Ok(hash));
+                    } else {
+                        let _ = rsp_tx.send(Err("Couldn't find finalized block".into()));
+                    }
+                    None
+                }
                 NonFinalizedWriteMessage::Invalidate { hash, rsp_tx } => {
                     tracing::info!(?hash, "invalidating a block in the non-finalized state");
                     let result = if let Some(writer) = header_chain.as_ref() {

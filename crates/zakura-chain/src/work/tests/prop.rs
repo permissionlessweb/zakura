@@ -27,7 +27,7 @@ fn test_headers() -> Vec<block::Header> {
         .map(|block_bytes| {
             let block = Block::zcash_deserialize(&block_bytes[..])
                 .expect("block test vector should deserialize");
-            *block.header
+            block.header.as_ref().clone()
         })
         .collect()
 }
@@ -56,7 +56,7 @@ prop_compose! {
             })
         ) -> Arc<block::Header> {
 
-        let mut fake_header = real_header;
+        let mut fake_header = real_header.clone();
         fake_header.solution = fake_solution;
 
         Arc::new(fake_header)
@@ -83,7 +83,7 @@ fn equihash_prop_test_solution() -> color_eyre::eyre::Result<()> {
     // Every test vector gets a deterministic invalid solution, so vector
     // coverage does not depend on random case selection.
     for real_header in &headers {
-        let mut fake_header = *real_header;
+        let mut fake_header = real_header.clone();
         fake_header.solution = equihash::Solution::for_proposal();
         assert_ne!(fake_header.solution, real_header.solution);
         fake_header
@@ -113,7 +113,7 @@ prop_compose! {
             })
         ) -> Arc<block::Header> {
 
-        let mut fake_header = real_header;
+        let mut fake_header = real_header.clone();
         fake_header.nonce = fake_nonce.into();
 
         Arc::new(fake_header)
@@ -127,7 +127,7 @@ fn equihash_prop_test_nonce() -> color_eyre::eyre::Result<()> {
     let headers = test_headers();
 
     for real_header in &headers {
-        let mut fake_header = *real_header;
+        let mut fake_header = real_header.clone();
         fake_header.nonce.0[0] ^= 1;
         assert_ne!(fake_header.nonce, real_header.nonce);
         fake_header
@@ -171,9 +171,9 @@ fn equihash_prop_test_input() -> color_eyre::eyre::Result<()> {
     let headers = test_headers();
 
     for real_header in &headers {
-        let mut fake_header = *real_header;
+        let mut fake_header = real_header.clone();
         fake_header.previous_block_hash.0[0] ^= 1;
-        assert_ne!(fake_header, *real_header);
+        assert_ne!(&fake_header, real_header);
         fake_header
             .solution
             .check(&fake_header, &Network::Mainnet)

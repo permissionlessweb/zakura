@@ -284,6 +284,24 @@ impl NonFinalizedState {
         self.insert(chain);
     }
 
+    /// How many best-chain blocks should be committed because Crosslink
+    /// finalized `hash`. Also drops forks that do not contain `hash`.
+    pub fn crosslink_finalize(
+        &mut self,
+        hash: block::Hash,
+    ) -> Option<Vec<ContextuallyVerifiedBlock>> {
+        let chain = self.find_chain(|chain| chain.height_by_hash(hash).is_some())?;
+        let height = chain.height_by_hash(hash)?;
+        self.chain_set.retain(|c| c.contains_block_hash(hash));
+        Some(
+            chain
+                .blocks
+                .range(..=height)
+                .map(|(_h, b)| b.clone())
+                .collect(),
+        )
+    }
+
     /// Finalize the lowest height block in the non-finalized portion of the best
     /// chain and update all side-chains to match.
     pub fn finalize(&mut self) -> FinalizableBlock {

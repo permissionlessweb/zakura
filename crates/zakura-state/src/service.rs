@@ -1041,6 +1041,29 @@ impl StateService {
         self.read_service.best_tip()
     }
 
+    fn send_crosslink_finalized(
+        &self,
+        hash: block::Hash,
+    ) -> oneshot::Receiver<Result<block::Hash, BoxError>> {
+        let (rsp_tx, rsp_rx) = oneshot::channel();
+
+        let Some(sender) = &self.block_write_sender.non_finalized else {
+            let _ = rsp_tx.send(Err("not ready to crosslink-finalize blocks".into()));
+            return rsp_rx;
+        };
+
+        if let Err(tokio::sync::mpsc::error::SendError(error)) =
+            sender.send(NonFinalizedWriteMessage::CrosslinkFinalized(hash, rsp_tx))
+        {
+            let NonFinalizedWriteMessage::CrosslinkFinalized(_, rsp_tx) = error else {
+                unreachable!("should return the same CrosslinkFinalized message");
+            };
+            let _ = rsp_tx.send(Err("failed to send Crosslink-finalized hash".into()));
+        }
+
+        rsp_rx
+    }
+
     fn send_invalidate_block(
         &self,
         hash: block::Hash,
@@ -1435,6 +1458,23 @@ impl Service<Request> for StateService {
             // Accesses shared writeable state in the StateService, NonFinalizedState, and ZakuraDb.
             //
             // The expected error type for this request is `CommitSemanticallyVerifiedError`.
+            Request::CrosslinkFinalizeBlock(finalized) => {
+                tracing::info!("Trying to Crosslink-finalize {}", finalized);
+                let rsp_rx = self.send_crosslink_finalized(finalized);
+                let span = Span::current();
+                async move {
+                    rsp_rx
+                        .await
+                        .map_err(|_recv_error| {
+                            BoxError::from("block was dropped from the queue of finalized blocks")
+                        })
+                        .and_then(std::convert::identity)
+                        .map(Response::CrosslinkFinalized)
+                }
+                .instrument(span)
+                .boxed()
+            }
+
             Request::CommitSemanticallyVerifiedBlock(semantically_verified) => {
                 let timer = CodeTimer::start();
                 self.assert_block_can_be_validated(&semantically_verified);

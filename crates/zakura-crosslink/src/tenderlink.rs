@@ -3,9 +3,8 @@
 //! This is the protocol the current Crosslink prototype testnet speaks.
 //! Single-node auto-sign remains available when `[crosslink]` has no peers.
 
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{DefaultHasher, Hasher};
 use std::net::SocketAddr;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use ed25519_zebra::SigningKey;
@@ -68,17 +67,7 @@ impl ZcashDeserialize for WireBftBlock {
         }
         let mut headers = Vec::with_capacity(header_count as usize);
         for _ in 0..header_count {
-            let header = Header::zcash_deserialize(&mut reader)?;
-            // zebra-crosslink reads an extra fat pointer when header version >= 5.
-            let logical = if header.version & 0xffff_0000 != 0 {
-                header.version.reverse_bits()
-            } else {
-                header.version
-            };
-            if logical >= 5 {
-                let _ = FatPointerToBftBlock::zcash_deserialize(&mut reader)?;
-            }
-            headers.push(header);
+            headers.push(Header::zcash_deserialize(&mut reader)?);
         }
         Ok(Self {
             version,
@@ -162,7 +151,7 @@ fn parse_ip_port_retry(s: &str, attempts: u32) -> Result<([u8; 16], u16), String
 /// derive the same key from `pow-a:24834`.
 fn addr_to_noise(identity: &str, endpoint_addr: &str) -> (StaticDHKeyPair, SecureUdpEndpoint) {
     let mut hasher = DefaultHasher::new();
-    identity.hash(&mut hasher);
+    hasher.write(identity.as_bytes());
     let seed = hasher.finish();
     let kp = snow::Builder::with_resolver(
         "Noise_IK_25519_ChaChaPoly_BLAKE2s".parse().unwrap(),
@@ -269,6 +258,7 @@ pub fn spawn_tenderlink<S>(
     );
 
     let h_propose = handle.clone();
+    let h_validate = handle.clone();
     let h_decide = handle.clone();
     let mut state_p = state.clone();
     let sigma = config.confirmation_depth_sigma.max(1);
@@ -305,10 +295,18 @@ pub fn spawn_tenderlink<S>(
                 })
             })),
             ClosureToValidateProposedBlock(Arc::new(move |block| {
+                let handle = h_validate.clone();
                 Box::pin(async move {
                     match WireBftBlock::zcash_deserialize(block.0.as_slice()) {
                         Ok(wire) => {
                             if wire.headers.is_empty() {
+                                return TMStatus::Fail;
+                            }
+                            let tip_fp = handle.tip_fat_pointer().await;
+                            if wire.previous_block_fat_ptr.points_at_block_hash()
+                                != tip_fp.points_at_block_hash()
+                            {
+                                warn!("tenderlink: prev fat pointer mismatch");
                                 return TMStatus::Fail;
                             }
                             TMStatus::Pass
@@ -381,7 +379,9 @@ where
             .await
             .map_err(|e| e.to_string())?
         {
-            StateResponse::BlockHeader { header, .. } => headers.push(*header),
+            StateResponse::BlockHeader { header, .. } => {
+                headers.push(std::sync::Arc::unwrap_or_clone(header))
+            }
             _ => return Ok(None),
         }
     }

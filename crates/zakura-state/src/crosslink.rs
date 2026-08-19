@@ -1,13 +1,14 @@
-//! TFL / Crosslink request and response types (lab prototype).
+//! TFL / Crosslink request and response types.
 //!
-//! PoW state does not need to store finality for this prototype: the TFL
-//! service in `zakura-crosslink` tracks finalized height in-process.
+//! Matches `zebra-state/src/crosslink.rs` from ShieldedLabs/zebra-crosslink so
+//! the TFL service and JSON-RPC surface stay name-compatible.
 
 use std::fmt;
 
 use tokio::sync::broadcast;
 
-use zakura_chain::block::{Hash as BlockHash, Height as BlockHeight};
+use zakura_chain::block::{FatPointerToBftBlock, Hash as BlockHash, Height as BlockHeight};
+use zakura_chain::transaction::Hash as TxHash;
 
 /// The finality status of a block.
 #[derive(Debug, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize)]
@@ -29,12 +30,18 @@ pub enum TFLServiceRequest {
     FinalBlockHeightHash,
     /// Subscribe to final-block changes.
     FinalBlockRx,
+    /// Force a final-block hash (lab / `set_tfl_finality_by_hash`).
+    SetFinalBlockHash(BlockHash),
     /// Get the finality status of a block.
     BlockFinalityStatus(BlockHeight, BlockHash),
+    /// Get the finality status of a transaction.
+    TxFinalityStatus(TxHash),
     /// Get the finalizer roster (pubkey, voting power).
     Roster,
     /// Get the fat pointer to the BFT chain tip.
     FatPointerToBFTChainTip,
+    /// Submit a staking command string (`ADD|val|name`, …).
+    StakingCmd(String),
 }
 
 /// Responses from the TFL service.
@@ -46,12 +53,18 @@ pub enum TFLServiceResponse {
     FinalBlockHeightHash(Option<(BlockHeight, BlockHash)>),
     /// Subscriber for final-block changes.
     FinalBlockRx(broadcast::Receiver<(BlockHeight, BlockHash)>),
+    /// Height after a forced finality set, if the hash was found.
+    SetFinalBlockHash(Option<BlockHeight>),
     /// Finality of one block.
     BlockFinalityStatus(Option<TFLBlockFinality>),
+    /// Finality of one transaction.
+    TxFinalityStatus(Option<TFLBlockFinality>),
     /// Roster entries.
     Roster(Vec<([u8; 32], u64)>),
-    /// Fat pointer bytes (ZcashSerialize of [`zakura_chain::block::FatPointerToBftBlock`]).
-    FatPointerToBFTChainTip(Vec<u8>),
+    /// Fat pointer to the BFT tip (typed, zebra-crosslink shape).
+    FatPointerToBFTChainTip(FatPointerToBftBlock),
+    /// Staking command accepted.
+    StakingCmd,
 }
 
 /// Errors from the TFL service.

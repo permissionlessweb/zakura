@@ -56,6 +56,17 @@ impl Version {
     /// - after Zebra restarts, and
     /// - after Zebra's local network is slow or shut down.
     fn initial_min_for_network(network: &Network) -> Version {
+        // Default Testnet / Mainnet / Regtest keep the crate-wide IBD floor
+        // (currently Nu6.2 → 170150). Custom testnets must not inherit that:
+        // ClT0 / UnknownTestnet peers advertise 170130 (Nu6.1 on default
+        // testnet). Using the default-testnet Nu6.2 floor rejects them at
+        // height 0 even after the ZIP table is applied to custom nets.
+        if let Network::Testnet(params) = network {
+            if !params.is_default_testnet() && !params.is_regtest() {
+                return Version::min_specified_for_height(network, block::Height(0));
+            }
+        }
+
         *constants::INITIAL_MIN_NETWORK_PROTOCOL_VERSION
             .get(&network.kind())
             .expect("We always have a value for testnet or mainnet")
@@ -91,45 +102,35 @@ impl Version {
     ) -> Version {
         Version(match (network, network_upgrade) {
             (_, Genesis) | (_, BeforeOverwinter) => 170_002,
-            (Testnet(params), Overwinter) if params.is_default_testnet() => 170_003,
+            (Testnet(_), Overwinter) => 170_003,
             (Mainnet, Overwinter) => 170_005,
-            (Testnet(params), Sapling) if params.is_default_testnet() => 170_007,
             (Testnet(params), Sapling) if params.is_regtest() => 170_006,
+            (Testnet(_), Sapling) => 170_007,
             (Mainnet, Sapling) => 170_007,
-            (Testnet(params), Blossom) if params.is_default_testnet() || params.is_regtest() => {
-                170_008
-            }
+            (Testnet(_), Blossom) => 170_008,
             (Mainnet, Blossom) => 170_009,
-            (Testnet(params), Heartwood) if params.is_default_testnet() || params.is_regtest() => {
-                170_010
-            }
+            (Testnet(_), Heartwood) => 170_010,
             (Mainnet, Heartwood) => 170_011,
-            (Testnet(params), Canopy) if params.is_default_testnet() || params.is_regtest() => {
-                170_012
-            }
+            (Testnet(_), Canopy) => 170_012,
             (Mainnet, Canopy) => 170_013,
-            (Testnet(params), Nu5) if params.is_default_testnet() || params.is_regtest() => 170_050,
+            (Testnet(_), Nu5) => 170_050,
             (Mainnet, Nu5) => 170_100,
-            (Testnet(params), Nu6) if params.is_default_testnet() || params.is_regtest() => 170_110,
+            (Testnet(_), Nu6) => 170_110,
             (Mainnet, Nu6) => 170_120,
-            (Testnet(params), Nu6_1) if params.is_default_testnet() || params.is_regtest() => {
-                170_130
-            }
+            (Testnet(_), Nu6_1) => 170_130,
             (Mainnet, Nu6_1) => 170_140,
-            (Testnet(params), Nu6_2) if params.is_default_testnet() || params.is_regtest() => {
-                170_150
-            }
+            (Testnet(_), Nu6_2) => 170_150,
             (Mainnet, Nu6_2) => 170_150,
             // TODO: these NU6.3 (Ironwood) and Nu7 protocol versions are provisional, bumped above
             // Nu6_2's 170_150. Update them when the real values are specified.
-            (Testnet(params), Nu6_3) if params.is_default_testnet() || params.is_regtest() => {
-                170_160
-            }
+            (Testnet(_), Nu6_3) => 170_160,
             (Mainnet, Nu6_3) => 170_160,
-            (Testnet(params), Nu7) if params.is_default_testnet() || params.is_regtest() => 170_170,
+            (Testnet(_), Nu7) => 170_170,
             (Mainnet, Nu7) => 170_180,
 
-            // It should be fine to reject peers with earlier network protocol versions on custom testnets for now.
+            // Future NetworkUpgrade variants only. Custom nets use the ZIP
+            // table above (same numbers as default testnet).
+            #[allow(unreachable_patterns)]
             (Testnet(_), _) => CURRENT_NETWORK_PROTOCOL_VERSION.0,
 
             #[cfg(zcash_unstable = "zfuture")]
@@ -247,6 +248,35 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn custom_testnet_accepts_nu61_peer_at_genesis() {
+        let _init_guard = zakura_test::init();
+
+        let network = zakura_chain::parameters::testnet::Parameters::build()
+            .with_network_name("UnknownTestnet")
+            .expect("UnknownTestnet is not a reserved name")
+            .to_network()
+            .expect("custom testnet should build from default funding streams");
+
+        assert!(
+            !matches!(&network, Network::Testnet(p) if p.is_default_testnet()),
+            "fixture must not collapse to default testnet"
+        );
+
+        let min = Version::min_remote_for_height(&network, block::Height(0));
+        let seed = Version(170_130);
+        assert!(
+            seed >= min,
+            "ClT0 Zebra seeds advertise 170130; custom-testnet min at height 0 was {min}, \
+             which would ObsoleteVersion them (old catch-all 170160 / IBD floor 170150)"
+        );
+        assert!(
+            min <= Version(170_130),
+            "min at genesis should be the ZIP min for the configured current upgrade \
+             (NU6 → 170110), not CURRENT 170160"
+        );
     }
 
     #[test]

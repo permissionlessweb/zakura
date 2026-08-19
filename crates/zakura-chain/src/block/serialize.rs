@@ -79,6 +79,9 @@ impl ZcashSerialize for Header {
         writer.write_u32::<LittleEndian>(self.difficulty_threshold.0)?;
         writer.write_all(&self.nonce[..])?;
         self.solution.zcash_serialize(&mut writer)?;
+        if self.logical_version() >= 5 {
+            self.fat_pointer_to_bft_block.zcash_serialize(&mut writer)?;
+        }
         Ok(())
     }
 }
@@ -102,7 +105,19 @@ impl ZcashDeserialize for Header {
                 ))?,
             difficulty_threshold: CompactDifficulty(reader.read_u32::<LittleEndian>()?),
             nonce: reader.read_32_bytes()?.into(),
-            solution: equihash::Solution::zcash_deserialize(reader)?,
+            solution: equihash::Solution::zcash_deserialize(&mut reader)?,
+            fat_pointer_to_bft_block: {
+                let logical = if version & 0xffff_0000 != 0 {
+                    version.reverse_bits()
+                } else {
+                    version
+                };
+                if logical >= 5 {
+                    super::FatPointerToBftBlock::zcash_deserialize(&mut reader)?
+                } else {
+                    super::FatPointerToBftBlock::null()
+                }
+            },
         })
     }
 }

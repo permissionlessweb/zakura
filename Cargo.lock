@@ -8518,6 +8518,7 @@ dependencies = [
  "ed25519-zebra",
  "futures",
  "hex",
+ "rand 0.8.6",
  "serde",
  "snow",
  "tenderlink",

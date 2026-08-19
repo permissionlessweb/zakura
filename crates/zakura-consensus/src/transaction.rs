@@ -603,15 +603,15 @@ where
                     joinsplit_data,
                     tx_id,
                 )?,
-                Transaction::V5 {
-                    ..
-                } => Self::verify_v5_transaction(
+                Transaction::V5 { .. } | Transaction::VCrosslink { .. } => {
+                    Self::verify_v5_transaction(
                     &req,
                     &network,
                     script_verifier,
                     cached_ffi_transaction.clone(),
-                    wtx_id.expect("a v5 transaction has a witnessed transaction ID"),
-                )?,
+                    wtx_id.expect("a v5/VCrosslink transaction has a witnessed transaction ID"),
+                )?
+                }
                 Transaction::V6 {
                     ..
                 } => Self::verify_v6_transaction(

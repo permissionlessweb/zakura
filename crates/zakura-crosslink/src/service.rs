@@ -16,7 +16,6 @@ use tracing::{debug, info, warn};
 use zakura_chain::block::{
     FatPointerSignature, FatPointerToBftBlock, Hash as BlockHash, Height as BlockHeight,
 };
-use zakura_chain::serialization::ZcashSerialize;
 use zakura_state::crosslink::{
     TFLBlockFinality, TFLServiceError, TFLServiceRequest, TFLServiceResponse,
 };
@@ -71,7 +70,7 @@ impl TFLServiceHandle {
         &self,
         request: TFLServiceRequest,
     ) -> Result<TFLServiceResponse, TFLServiceError> {
-        let inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().await;
         match request {
             TFLServiceRequest::IsTFLActivated => {
                 Ok(TFLServiceResponse::IsTFLActivated(inner.activated))
@@ -82,6 +81,22 @@ impl TFLServiceHandle {
             TFLServiceRequest::FinalBlockRx => Ok(TFLServiceResponse::FinalBlockRx(
                 inner.final_change_tx.subscribe(),
             )),
+            TFLServiceRequest::SetFinalBlockHash(hash) => {
+                if !inner.activated {
+                    return Ok(TFLServiceResponse::SetFinalBlockHash(None));
+                }
+                if let Some((height, stored)) = inner.latest_final {
+                    if stored == hash {
+                        return Ok(TFLServiceResponse::SetFinalBlockHash(Some(height)));
+                    }
+                }
+                inner.latest_final = Some((inner.latest_final.map(|p| p.0).unwrap_or(BlockHeight(0)), hash));
+                let height = inner.latest_final.map(|p| p.0);
+                if let Some(pair) = inner.latest_final {
+                    let _ = inner.final_change_tx.send(pair);
+                }
+                Ok(TFLServiceResponse::SetFinalBlockHash(height))
+            }
             TFLServiceRequest::BlockFinalityStatus(height, hash) => {
                 let status = match inner.latest_final {
                     None => Some(TFLBlockFinality::NotYetFinalized),
@@ -94,17 +109,26 @@ impl TFLServiceHandle {
                 };
                 Ok(TFLServiceResponse::BlockFinalityStatus(status))
             }
+            TFLServiceRequest::TxFinalityStatus(_hash) => {
+                let status = match inner.latest_final {
+                    None => Some(TFLBlockFinality::NotYetFinalized),
+                    Some(_) => Some(TFLBlockFinality::NotYetFinalized),
+                };
+                Ok(TFLServiceResponse::TxFinalityStatus(status))
+            }
             TFLServiceRequest::Roster => {
                 let roster = inner.validators.iter().map(|(k, v)| (*k, *v)).collect();
                 Ok(TFLServiceResponse::Roster(roster))
             }
             TFLServiceRequest::FatPointerToBFTChainTip => {
-                let mut buf = Vec::new();
-                inner
-                    .fat_pointer_to_tip
-                    .zcash_serialize(&mut buf)
-                    .map_err(|e| TFLServiceError::Misc(e.to_string()))?;
-                Ok(TFLServiceResponse::FatPointerToBFTChainTip(buf))
+                Ok(TFLServiceResponse::FatPointerToBFTChainTip(
+                    inner.fat_pointer_to_tip.clone(),
+                ))
+            }
+            TFLServiceRequest::StakingCmd(cmd) => {
+                drop(inner);
+                self.apply_staking_cmd(&cmd).await?;
+                Ok(TFLServiceResponse::StakingCmd)
             }
         }
     }
@@ -115,14 +139,11 @@ impl TFLServiceHandle {
         fp: FatPointerToBftBlock,
     ) {
         let candidate = BlockHeight(block.finalization_candidate_height);
+        let cand_hash = BlockHash(block.finalization_candidate().hash);
         let mut inner = self.inner.lock().await;
         inner.bft_blocks.push(block);
         inner.fat_pointer_to_tip = fp;
-        if let Some((_, hash)) = inner.latest_final {
-            inner.latest_final = Some((candidate, hash));
-        } else {
-            inner.latest_final = Some((candidate, BlockHash([0u8; 32])));
-        }
+        inner.latest_final = Some((candidate, cand_hash));
         if let Some(pair) = inner.latest_final {
             let _ = inner.final_change_tx.send(pair);
         }
@@ -133,34 +154,145 @@ impl TFLServiceHandle {
         self.inner.lock().await.fat_pointer_to_tip.clone()
     }
 
+    /// Non-blocking snapshot of the current BFT fat pointer.
+    pub fn tip_fat_pointer_now(&self) -> FatPointerToBftBlock {
+        self.inner
+            .try_lock()
+            .map(|g| g.fat_pointer_to_tip.clone())
+            .unwrap_or_else(|_| FatPointerToBftBlock::null())
+    }
+
     pub(crate) async fn next_bft_height(&self) -> u32 {
         self.inner.lock().await.bft_blocks.len() as u32 + 1
     }
+
+    async fn apply_staking_cmd(&self, cmd: &str) -> Result<(), TFLServiceError> {
+        let action = parse_staking_cmd(cmd)?;
+        let Some(action) = action else {
+            return Ok(());
+        };
+        let mut inner = self.inner.lock().await;
+        apply_staking_action(&mut inner.validators, &action);
+        Ok(())
+    }
 }
 
+fn parse_staking_cmd(
+    cmd_str: &str,
+) -> Result<Option<zakura_chain::transaction::StakingAction>, TFLServiceError> {
+    use zakura_chain::transaction::{StakingAction, StakingActionKind};
+    let cmd = cmd_str.as_bytes();
+    if cmd.is_empty() {
+        return Ok(None);
+    }
+    if cmd.len() < 4 || cmd[3] != b'|' {
+        return Err(TFLServiceError::Misc(format!(
+            "Roster command invalid: expected initial instruction\nCMD: \"{cmd_str}\""
+        )));
+    }
+    let kind = match &cmd[..3] {
+        b"ADD" => StakingActionKind::Add,
+        b"SUB" => StakingActionKind::Sub,
+        b"CLR" => StakingActionKind::Clear,
+        b"MOV" => StakingActionKind::Move,
+        b"MCL" => StakingActionKind::MoveClear,
+        _ => {
+            return Err(TFLServiceError::Misc(format!(
+                "Roster command invalid: unrecognized instruction:\nCMD: \"{cmd_str}\""
+            )))
+        }
+    };
+    let rest = &cmd_str[4..];
+    let mut parts = rest.split('|');
+    let val: u64 = parts
+        .next()
+        .and_then(|s| s.trim().parse().ok())
+        .ok_or_else(|| TFLServiceError::Misc(format!("Roster command invalid: expected u64\nCMD: \"{cmd_str}\"")))?;
+    let target_name = parts
+        .next()
+        .ok_or_else(|| TFLServiceError::Misc(format!("Roster command invalid: expected public address\nCMD: \"{cmd_str}\"")))?
+        .to_string();
+    let source_name = parts.next().unwrap_or("").to_string();
+    let (_, _, target) = rng_keys_from_bytes(target_name.as_bytes());
+    let source = if source_name.is_empty() {
+        [0u8; 32]
+    } else {
+        rng_keys_from_bytes(source_name.as_bytes()).2
+    };
+    if matches!(kind, StakingActionKind::Move | StakingActionKind::MoveClear) && source_name.is_empty()
+    {
+        return Err(TFLServiceError::Misc(format!(
+            "Roster command invalid: can't move from non-present finalizer\nCMD: \"{cmd_str}\""
+        )));
+    }
+    Ok(Some(StakingAction {
+        kind,
+        val,
+        target,
+        source,
+        insecure_target_name: target_name,
+        insecure_source_name: source_name,
+    }))
+}
+
+fn apply_staking_action(
+    roster: &mut HashMap<[u8; 32], u64>,
+    action: &zakura_chain::transaction::StakingAction,
+) {
+    use zakura_chain::transaction::StakingActionKind;
+    let (has_add, sub_key, is_clear) = match action.kind {
+        StakingActionKind::Add => (true, None, false),
+        StakingActionKind::Sub => (false, Some(action.target), false),
+        StakingActionKind::Clear => (false, Some(action.target), true),
+        StakingActionKind::Move => (true, Some(action.source), false),
+        StakingActionKind::MoveClear => (true, Some(action.source), true),
+    };
+    let mut amount = action.val;
+    if let Some(key) = sub_key {
+        let Some(power) = roster.get_mut(&key) else {
+            warn!("staking cmd: subtract target not on roster");
+            return;
+        };
+        if *power < action.val && !is_clear {
+            warn!("staking cmd: subtract exceeds voting power");
+            return;
+        }
+        if is_clear {
+            if *power < action.val {
+                warn!("staking cmd: clear target above current power");
+                return;
+            }
+            amount = *power - action.val;
+        }
+        *power = power.saturating_sub(amount);
+        if *power == 0 {
+            roster.remove(&key);
+        }
+    }
+    if has_add {
+        *roster.entry(action.target).or_insert(0) += amount;
+    }
+}
+
+/// Same derivation zebra-crosslink uses: `DefaultHasher.write(bytes)` then `StdRng`.
 pub(crate) fn rng_keys_from_bytes(bytes: &[u8]) -> (u64, SigningKey, [u8; 32]) {
-    use std::hash::{Hash, Hasher};
+    use rand::{rngs::StdRng, SeedableRng};
+    use std::hash::Hasher;
     let mut hasher = std::hash::DefaultHasher::new();
-    bytes.hash(&mut hasher);
+    hasher.write(bytes);
     let seed = hasher.finish();
-    let mut arr = [0u8; 32];
-    arr[..8].copy_from_slice(&seed.to_le_bytes());
-    let sk = SigningKey::from(arr);
+    let mut rng = StdRng::seed_from_u64(seed);
+    let sk = SigningKey::new(&mut rng);
     let vk = VerificationKey::from(&sk);
     (seed, sk, vk.into())
 }
 
 pub(crate) fn key_from_name(name: &str) -> (SigningKey, [u8; 32]) {
-    let mut seed = [0u8; 32];
-    let bytes = name.as_bytes();
-    let n = bytes.len().min(32);
-    seed[..n].copy_from_slice(&bytes[..n]);
-    let sk = SigningKey::from(seed);
-    let vk = VerificationKey::from(&sk);
-    (sk, vk.into())
+    let (_, sk, pk) = rng_keys_from_bytes(name.as_bytes());
+    (sk, pk)
 }
 
-/// Sign a 44-byte vote (block hash || 12 zero bytes).
+/// Sign the zebra/tenderlink 76-byte vote: `pk ‖ template(44)`.
 pub fn sign_fat_pointer(block_hash: &Blake3Hash, keys: &[SigningKey]) -> FatPointerToBftBlock {
     let mut vote = [0u8; 44];
     vote[..32].copy_from_slice(&block_hash.0);
@@ -169,7 +301,10 @@ pub fn sign_fat_pointer(block_hash: &Blake3Hash, keys: &[SigningKey]) -> FatPoin
         .map(|sk| {
             let vk = VerificationKey::from(sk);
             let pk: [u8; 32] = vk.into();
-            let sig: Signature = sk.sign(&vote);
+            let mut msg = [0u8; 76];
+            msg[..32].copy_from_slice(&pk);
+            msg[32..].copy_from_slice(&vote);
+            let sig: Signature = sk.sign(&msg);
             FatPointerSignature {
                 public_key: pk,
                 vote_signature: sig.to_bytes(),
@@ -182,18 +317,38 @@ pub fn sign_fat_pointer(block_hash: &Blake3Hash, keys: &[SigningKey]) -> FatPoin
     }
 }
 
-/// Reject null / empty / all-zero-key fat pointers (CX5).
+/// Reject empty/zero keys and signatures that fail the 76-byte zebra vote.
 pub fn reject_bad_fat_pointer(fp: &FatPointerToBftBlock) -> Result<(), TFLServiceError> {
     if !fp.has_signatures() {
         return Err(TFLServiceError::Misc("empty fat pointer signatures".into()));
     }
-    if fp.signatures.iter().any(|s| s.public_key == [0u8; 32]) {
-        return Err(TFLServiceError::Misc("zero public key".into()));
-    }
-    if fp.signatures.iter().any(|s| s.vote_signature == [0u8; 64]) {
-        return Err(TFLServiceError::Misc("zero signature".into()));
+    if !validate_fat_pointer_signatures(fp) {
+        return Err(TFLServiceError::Misc("fat pointer signature verify failed".into()));
     }
     Ok(())
+}
+
+fn validate_fat_pointer_signatures(fp: &FatPointerToBftBlock) -> bool {
+    if fp.signatures.is_empty() {
+        return false;
+    }
+    let template = &fp.vote_for_block_without_finalizer_public_key;
+    for s in &fp.signatures {
+        if s.public_key == [0u8; 32] || s.vote_signature == [0u8; 64] {
+            return false;
+        }
+        let Ok(vk) = VerificationKey::try_from(s.public_key) else {
+            return false;
+        };
+        let mut msg = [0u8; 76];
+        msg[..32].copy_from_slice(&s.public_key);
+        msg[32..].copy_from_slice(template);
+        let sig = Signature::from(s.vote_signature);
+        if vk.verify(&sig, &msg).is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 /// Spawn the TFL main loop. `state` is the node state service.
@@ -212,7 +367,15 @@ where
         .unwrap_or_else(|| "zakura-crosslink-lab".into());
     let (signing_key, public_key) = key_from_name(&name);
     let mut validators = HashMap::new();
-    validators.insert(public_key, 1);
+    if config.malachite_peers.is_empty() {
+        validators.insert(public_key, 1);
+    } else {
+        for peer in &config.malachite_peers {
+            let (_, _, pk) = rng_keys_from_bytes(peer.as_bytes());
+            validators.insert(pk, 1);
+        }
+        validators.entry(public_key).or_insert(1);
+    }
 
     let params = ZcashCrosslinkParameters {
         bc_confirmation_depth_sigma: config.confirmation_depth_sigma.max(1),
@@ -221,7 +384,7 @@ where
 
     let handle = TFLServiceHandle {
         inner: Arc::new(Mutex::new(TFLServiceInternal {
-            activated: true,
+            activated: false,
             activation_height: config.activation_height,
             params,
             signing_key: signing_key.clone(),
@@ -276,9 +439,14 @@ where
     };
 
     let (activation, sigma, last_final, sk) = {
-        let inner = handle.inner.lock().await;
+        let mut inner = handle.inner.lock().await;
         if !inner.activated {
-            return Ok(());
+            if tip.0 .0 >= inner.activation_height {
+                inner.activated = true;
+                info!(height = tip.0 .0, "activating TFL");
+            } else {
+                return Ok(());
+            }
         }
         (
             inner.activation_height,
@@ -339,12 +507,27 @@ where
     let hash = block.blake3_hash();
     let fp = sign_fat_pointer(&hash, &[sk]);
     reject_bad_fat_pointer(&fp).map_err(|e| e.to_string())?;
+    let cand_hash = BlockHash(block.finalization_candidate().hash);
 
     let mut inner = handle.inner.lock().await;
     inner.bft_blocks.push(block);
     inner.fat_pointer_to_tip = fp;
-    inner.latest_final = Some((candidate_height, tip.1));
-    let _ = inner.final_change_tx.send((candidate_height, tip.1));
+    inner.latest_final = Some((candidate_height, cand_hash));
+    let _ = inner.final_change_tx.send((candidate_height, cand_hash));
+    drop(inner);
+
+    let ready = state.ready().await.map_err(|e| e.to_string())?;
+    match ready
+        .call(StateRequest::CrosslinkFinalizeBlock(cand_hash))
+        .await
+    {
+        Ok(StateResponse::CrosslinkFinalized(hash)) => {
+            info!(?hash, "PoW state accepted Crosslink finality");
+        }
+        Ok(other) => warn!(?other, "unexpected CrosslinkFinalizeBlock response"),
+        Err(e) => warn!(?e, "CrosslinkFinalizeBlock failed"),
+    }
+
     info!(
         bft_height,
         pow_final = candidate_height.0,
@@ -361,13 +544,8 @@ mod tests {
     fn peer_roster_key_matches_insecure_user_name() {
         let id = "pow-a:24834";
         let (_, local_pk) = key_from_name(id);
-        let (_, peer_pk) = key_from_name(id);
+        let (_, _, peer_pk) = rng_keys_from_bytes(id.as_bytes());
         assert_eq!(local_pk, peer_pk);
-        let (_, _, old_wrong) = rng_keys_from_bytes(id.as_bytes());
-        assert_ne!(
-            local_pk, old_wrong,
-            "rng_keys_from_bytes must not be used for roster peers"
-        );
     }
 
     #[test]

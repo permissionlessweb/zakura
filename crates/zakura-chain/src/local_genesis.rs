@@ -326,6 +326,7 @@ fn build_block(
         difficulty_threshold: difficulty,
         nonce: HexDebug([0; 32]),
         solution: crate::work::equihash::Solution::for_proposal(),
+        fat_pointer_to_bft_block: Default::default(),
     };
 
     let header = if disable_pow {

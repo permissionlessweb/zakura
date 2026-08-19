@@ -1838,6 +1838,13 @@ impl Chain {
                     sapling_shielded_data,
                     orchard_shielded_data,
                     ..
+                }
+                | VCrosslink {
+                    inputs,
+                    outputs,
+                    sapling_shielded_data,
+                    orchard_shielded_data,
+                    ..
                 } => (
                     inputs,
                     outputs,
@@ -2042,6 +2049,13 @@ impl UpdateWith<ContextuallyVerifiedBlock> for Chain {
                     &None::<ironwood::ShieldedData>,
                 ),
                 V5 {
+                    inputs,
+                    outputs,
+                    sapling_shielded_data,
+                    orchard_shielded_data,
+                    ..
+                }
+                | VCrosslink {
                     inputs,
                     outputs,
                     sapling_shielded_data,

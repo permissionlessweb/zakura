@@ -1105,6 +1105,12 @@ pub enum Request {
     /// [0]: (crate::error::CommitSemanticallyVerifiedError)
     CommitSemanticallyVerifiedBlock(SemanticallyVerifiedBlock),
 
+    /// Tell PoW that Crosslink has finalized this block hash.
+    ///
+    /// The writer finalizes every non-finalized ancestor of `hash` on the chain
+    /// that contains it (ShieldedLabs `CrosslinkFinalizeBlock`).
+    CrosslinkFinalizeBlock(zakura_chain::block::Hash),
+
     /// Commit a checkpointed block to the state, skipping most but not all
     /// contextual validation.
     ///
@@ -1383,6 +1389,7 @@ impl Request {
             Request::KnownBlock(_) => "known_block",
             Request::InvalidateBlock(_) => "invalidate_block",
             Request::ReconsiderBlock(_) => "reconsider_block",
+            Request::CrosslinkFinalizeBlock(_) => "crosslink_finalize_block",
             Request::CheckBlockProposalValidity(_) => "check_block_proposal_validity",
         }
     }
@@ -1994,7 +2001,8 @@ impl TryFrom<Request> for ReadRequest {
             | Request::CommitSemanticallyVerifiedBlock(_)
             | Request::CommitCheckpointVerifiedBlock(_)
             | Request::InvalidateBlock(_)
-            | Request::ReconsiderBlock(_) => Err("ReadService does not write blocks"),
+            | Request::ReconsiderBlock(_)
+            | Request::CrosslinkFinalizeBlock(_) => Err("ReadService does not write blocks"),
 
             Request::AwaitUtxo(_) => Err("ReadService does not track pending UTXOs. \
                      Manually convert the request to ReadRequest::AnyChainUtxo, \

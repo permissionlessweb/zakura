@@ -27,7 +27,7 @@ impl<'a> TxIdBuilder<'a> {
             | Transaction::V2 { .. }
             | Transaction::V3 { .. }
             | Transaction::V4 { .. } => self.txid_v1_to_v4(),
-            Transaction::V5 { .. } => self.txid_v5(),
+            Transaction::V5 { .. } | Transaction::VCrosslink { .. } => self.txid_v5(),
             Transaction::V6 { .. } => self.txid_v6(),
         }
     }

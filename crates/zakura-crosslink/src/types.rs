@@ -142,12 +142,13 @@ impl BftBlock {
         })
     }
 
-    /// BLAKE3 of the serialized block (unkeyed, matches terp-rs LC).
+    /// Keyed BLAKE3 of the serialized block (tenderlink `HashKeys::value_id`).
     pub fn blake3_hash(&self) -> Blake3Hash {
-        let mut buf = Vec::new();
-        self.zcash_serialize(&mut buf)
-            .expect("vec write is infallible");
-        Blake3Hash(blake3::hash(&buf).into())
+        let key = tenderlink::HashKeys::default().value_id.0;
+        let mut hasher = blake3::Hasher::new_keyed(&key);
+        self.zcash_serialize(&mut hasher)
+            .expect("hasher write is infallible");
+        Blake3Hash(hasher.finalize().into())
     }
 }
 

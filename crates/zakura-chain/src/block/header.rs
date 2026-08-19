@@ -12,7 +12,7 @@ use crate::{
     work::{difficulty::CompactDifficulty, equihash::Solution},
 };
 
-use super::{merkle, Commitment, CommitmentError, Hash, Height};
+use super::{merkle, Commitment, CommitmentError, FatPointerToBftBlock, Hash, Height};
 
 #[cfg(any(test, feature = "proptest-impl"))]
 use proptest_derive::Arbitrary;
@@ -23,7 +23,7 @@ use proptest_derive::Arbitrary;
 /// backwards reference (previous header hash) present in the block
 /// header. Each block points backwards to its parent, all the way
 /// back to the genesis block (the first block in the blockchain).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Header {
     /// The block's version field. This is supposed to be `4`:
     ///
@@ -83,6 +83,11 @@ pub struct Header {
 
     /// The Equihash solution.
     pub solution: Solution,
+
+    /// Crosslink fat pointer appended when the logical header version is ≥ 5.
+    /// Version 4 (stock Zcash / mainnet) never writes this field.
+    #[serde(default)]
+    pub fat_pointer_to_bft_block: FatPointerToBftBlock,
 }
 
 /// TODO: Use this error as the source for zakura_consensus::error::BlockError::Time,
@@ -101,6 +106,15 @@ pub enum BlockTimeError {
 }
 
 impl Header {
+    /// Logical Crosslink header version (handles bit-reversed mining-pool versions).
+    pub fn logical_version(&self) -> u32 {
+        if self.version & 0xffff_0000 != 0 {
+            self.version.reverse_bits()
+        } else {
+            self.version
+        }
+    }
+
     /// Shared observable-header validation delegates to this canonical time calculation.
     #[allow(clippy::unwrap_in_result)]
     pub fn time_is_valid_at(

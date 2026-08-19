@@ -17,6 +17,7 @@ byteorder = { workspace = true }
 ed25519-zebra = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 serde = { workspace = true, features = ["serde_derive"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["time", "rt-multi-thread", "macros", "sync"] }

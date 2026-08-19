@@ -11,7 +11,10 @@ use reddsa::{orchard::Binding, orchard::SpendAuth, Signature};
 use crate::{
     amount,
     block::MAX_BLOCK_BYTES,
-    parameters::{OVERWINTER_VERSION_GROUP_ID, SAPLING_VERSION_GROUP_ID, TX_V5_VERSION_GROUP_ID},
+    parameters::{
+        OVERWINTER_VERSION_GROUP_ID, SAPLING_VERSION_GROUP_ID, TX_V5_VERSION_GROUP_ID,
+        TX_VCROSSLINK_VERSION_GROUP_ID,
+    },
     primitives::{Halo2Proof, ZkSnarkProof},
     serialization::{
         zcash_deserialize_external_count, zcash_serialize_empty_list,
@@ -806,6 +809,35 @@ impl ZcashSerialize for Transaction {
                 )?;
             }
 
+            Transaction::VCrosslink {
+                network_upgrade,
+                lock_time,
+                expiry_height,
+                inputs,
+                outputs,
+                sapling_shielded_data,
+                orchard_shielded_data,
+                staking_action,
+            } => {
+                writer.write_u32::<LittleEndian>(TX_VCROSSLINK_VERSION_GROUP_ID)?;
+                writer.write_u32::<LittleEndian>(u32::from(
+                    network_upgrade
+                        .branch_id()
+                        .expect("valid transactions must have a network upgrade with a branch id"),
+                ))?;
+                lock_time.zcash_serialize(&mut writer)?;
+                writer.write_u32::<LittleEndian>(expiry_height.0)?;
+                inputs.zcash_serialize(&mut writer)?;
+                outputs.zcash_serialize(&mut writer)?;
+                sapling_shielded_data.zcash_serialize(&mut writer)?;
+                serialize_optional_orchard_shielded_data_with_flags(
+                    orchard_shielded_data,
+                    &mut writer,
+                    !ALLOW_CROSS_ADDRESS_BIT,
+                )?;
+                crate::transaction::StakingAction::write(staking_action, &mut writer)?;
+            }
+
             Transaction::V6 {
                 network_upgrade,
                 lock_time,
@@ -1163,6 +1195,45 @@ impl ZcashDeserialize for Transaction {
                     outputs,
                     sapling_shielded_data,
                     orchard_shielded_data,
+                })
+            }
+            (7, true) => {
+                let id = limited_reader.read_u32::<LittleEndian>()?;
+                if id != TX_VCROSSLINK_VERSION_GROUP_ID {
+                    return Err(SerializationError::Parse(
+                        "expected TX_VCROSSLINK_VERSION_GROUP_ID",
+                    ));
+                }
+                let network_upgrade =
+                    NetworkUpgrade::try_from(limited_reader.read_u32::<LittleEndian>()?)?;
+                if network_upgrade < NetworkUpgrade::Nu5 {
+                    return Err(SerializationError::Parse(
+                        "VCrosslink transaction must have NU5 or later consensus branch ID",
+                    ));
+                }
+                let lock_time = LockTime::zcash_deserialize(&mut limited_reader)?;
+                let expiry_height = block::Height(limited_reader.read_u32::<LittleEndian>()?);
+                let inputs: Vec<transparent::Input> = Vec::zcash_deserialize(&mut limited_reader)?;
+                let outputs = Vec::zcash_deserialize(&mut limited_reader)?;
+                let is_coinbase = inputs.len() == 1
+                    && matches!(inputs.first(), Some(transparent::Input::Coinbase { .. }));
+                let sapling_shielded_data =
+                    deserialize_v5_sapling_shielded_data(&mut limited_reader, is_coinbase)?;
+                let orchard_shielded_data = deserialize_orchard_shielded_data_with_flags(
+                    &mut limited_reader,
+                    !ALLOW_CROSS_ADDRESS_BIT,
+                )?;
+                let staking_action = crate::transaction::StakingAction::read(&mut limited_reader)
+                    .map_err(|e| SerializationError::Io(std::sync::Arc::new(e)))?;
+                Ok(Transaction::VCrosslink {
+                    network_upgrade,
+                    lock_time,
+                    expiry_height,
+                    inputs,
+                    outputs,
+                    sapling_shielded_data,
+                    orchard_shielded_data,
+                    staking_action,
                 })
             }
             (6, true) => {

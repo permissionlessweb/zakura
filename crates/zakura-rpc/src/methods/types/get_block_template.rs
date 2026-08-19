@@ -220,6 +220,10 @@ pub struct BlockTemplateResponse {
     #[serde(rename = "submitold")]
     #[getter(copy)]
     pub(crate) submit_old: Option<bool>,
+
+    /// Version-5 Crosslink field: fat pointer to the current BFT tip.
+    /// Null when TFL is off or has not produced a pointer yet.
+    pub fat_pointer_to_bft_block: zakura_chain::block::FatPointerToBftBlock,
 }
 
 impl fmt::Debug for BlockTemplateResponse {
@@ -278,6 +282,7 @@ impl BlockTemplateResponse {
         #[cfg(not(test))] mempool_txs: Vec<VerifiedUnminedTx>,
         #[cfg(test)] mempool_txs: Vec<(InBlockTxDependenciesDepth, VerifiedUnminedTx)>,
         submit_old: Option<bool>,
+        fat_pointer_to_bft_block: zakura_chain::block::FatPointerToBftBlock,
     ) -> Self {
         // Determine the next block height.
         let height = chain_info
@@ -396,6 +401,8 @@ impl BlockTemplateResponse {
             max_time: chain_info.max_time,
 
             submit_old,
+
+            fat_pointer_to_bft_block,
         }
     }
 }

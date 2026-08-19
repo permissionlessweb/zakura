@@ -1662,7 +1662,10 @@ fn binding_signatures() {
                 .transactions
             {
                 match &*tx {
-                    Transaction::V1 { .. } | Transaction::V2 { .. } | Transaction::V3 { .. } => (),
+                    Transaction::V1 { .. }
+                    | Transaction::V2 { .. }
+                    | Transaction::V3 { .. }
+                    | Transaction::VCrosslink { .. } => (),
                     Transaction::V4 {
                         sapling_shielded_data,
                         ..

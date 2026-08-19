@@ -216,6 +216,7 @@ fn generate_chain(network: &Network) -> Vec<Arc<Block>> {
             difficulty_threshold: network.target_difficulty_limit().to_compact(),
             nonce: HexDebug([0; 32]),
             solution: equihash::Solution::for_proposal(),
+            fat_pointer_to_bft_block: Default::default(),
         };
         let mut block = Arc::new(Block {
             header: Arc::new(header),

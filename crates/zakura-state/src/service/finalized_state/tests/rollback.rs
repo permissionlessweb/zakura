@@ -532,7 +532,7 @@ fn spend_tx(outpoint: OutPoint, value: Amount<NonNegative>, address: &Address) -
 fn child_block(parent: &Block, transactions: Vec<Arc<Transaction>>) -> Arc<Block> {
     let header = block::Header {
         previous_block_hash: parent.hash(),
-        ..*parent.header
+        ..parent.header.as_ref().clone()
     };
     Arc::new(Block {
         header: Arc::new(header),

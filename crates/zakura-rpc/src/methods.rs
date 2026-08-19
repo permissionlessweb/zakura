@@ -170,6 +170,8 @@ pub(super) const PARAM_COMMAND_DESC: &str = "The command to execute.";
 #[allow(non_upper_case_globals)]
 pub(super) const PARAM__PARAMETERS_DESC: &str = "The parameters for the command.";
 pub(super) const PARAM_BLOCK_HASH_DESC: &str = "The hash of the block to return.";
+pub(super) const PARAM_HASH_DESC: &str = "The hex-encoded hash.";
+pub(super) const PARAM_STRING_DESC: &str = "A string parameter.";
 pub(super) const PARAM_ADDRESS_DESC: &str = "The address to return.";
 pub(super) const PARAM_ADDRESS_STRINGS_DESC: &str = "The addresses to return.";
 pub(super) const PARAM_ADDR_DESC: &str = "The address to return.";
@@ -806,25 +808,49 @@ pub trait Rpc {
     async fn add_node(&self, addr: PeerSocketAddr, command: AddNodeCommand) -> Result<()>;
 
 
-    /// Crosslink: is TFL activated? Missing gadget => false, not a fake tip.
-    #[cfg(feature = "crosslink")]
+    /// ShieldedLabs name: is TFL activated?
+    #[method(name = "is_tfl_activated")]
+    async fn is_tfl_activated(&self) -> Result<Option<bool>>;
+
+    /// Alias kept for earlier Zakura lab clients.
     #[method(name = "get_tfl_is_activated")]
     async fn get_tfl_is_activated(&self) -> Result<bool>;
 
-    /// Crosslink: finalized PoW height and hash.
-    #[cfg(feature = "crosslink")]
-    #[method(name = "get_tfl_final_block_height_and_hash")]
-    async fn get_tfl_final_block_height_and_hash(&self) -> Result<Option<GetBlockHeightAndHashResponse>>;
+    /// Roster in ZEC (1e-8 ZEC units).
+    #[method(name = "get_tfl_roster_zec")]
+    async fn get_tfl_roster_zec(&self) -> Result<Vec<(String, f64)>>;
 
-    /// Crosslink: hex-encoded fat pointer (ZcashSerialize) to the BFT tip.
-    #[cfg(feature = "crosslink")]
+    /// Roster in zats.
+    #[method(name = "get_tfl_roster_zats")]
+    async fn get_tfl_roster_zats(&self) -> Result<Vec<(String, u64)>>;
+
+    /// Hex-encoded fat pointer (ZcashSerialize) to the BFT tip.
     #[method(name = "get_tfl_fat_pointer_to_bft_chain_tip")]
     async fn get_tfl_fat_pointer_to_bft_chain_tip(&self) -> Result<Option<String>>;
 
-    /// Crosslink: finalizer roster as (hex pubkey, voting power).
-    #[cfg(feature = "crosslink")]
-    #[method(name = "get_tfl_roster_zats")]
-    async fn get_tfl_roster_zats(&self) -> Result<Vec<(String, u64)>>;
+    /// Submit a staking command (`ADD|val|name`, `SUB|…`, `CLR|…`, `MOV|…`, `MCL|…`).
+    #[method(name = "staking_command")]
+    async fn staking_command(&self, string: String) -> Result<String>;
+
+    /// Finalized PoW block hash.
+    #[method(name = "get_tfl_final_block_hash")]
+    async fn get_tfl_final_block_hash(&self) -> Result<Option<GetBlockHashResponse>>;
+
+    /// Finalized PoW height and hash.
+    #[method(name = "get_tfl_final_block_height_and_hash")]
+    async fn get_tfl_final_block_height_and_hash(&self) -> Result<Option<GetBlockHeightAndHashResponse>>;
+
+    /// Finality of a PoW block by hash.
+    #[method(name = "get_tfl_block_finality_from_hash")]
+    async fn get_tfl_block_finality_from_hash(&self, hash: String) -> Result<Option<String>>;
+
+    /// Finality of a transaction (NotYetFinalized until it is in a TFL-final block).
+    #[method(name = "get_tfl_tx_finality_from_hash")]
+    async fn get_tfl_tx_finality_from_hash(&self, hash: String) -> Result<Option<String>>;
+
+    /// Force TFL finality at this hash (lab).
+    #[method(name = "set_tfl_finality_by_hash")]
+    async fn set_tfl_finality_by_hash(&self, hash: String) -> Result<u32>;
 
     /// Returns an OpenRPC schema as a description of this service.
     #[method(name = "rpc.discover")]
@@ -2653,6 +2679,7 @@ where
                         server_long_poll_id,
                         vec![],
                         submit_old,
+                        tfl_tip_fat_pointer(),
                     )
                     .into())
                 }
@@ -2717,6 +2744,7 @@ where
             server_long_poll_id,
             mempool_txs,
             submit_old,
+            tfl_tip_fat_pointer(),
         )
         .into())
     }
@@ -3210,101 +3238,60 @@ where
     }
 
 
-    #[cfg(feature = "crosslink")]
-    async fn get_tfl_is_activated(&self) -> Result<bool> {
-        let Some(tfl) = zakura_crosslink::global() else {
-            return Ok(false);
-        };
-        match tfl.call(zakura_crosslink::TFLServiceRequest::IsTFLActivated).await {
-            Ok(zakura_crosslink::TFLServiceResponse::IsTFLActivated(b)) => Ok(b),
-            Ok(_) => Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                "unexpected TFL response",
-                None::<()>,
-            )),
-            Err(e) => Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                e.to_string(),
-                None::<()>,
-            )),
-        }
+    async fn is_tfl_activated(&self) -> Result<Option<bool>> {
+        Ok(Some(tfl_is_activated().await))
     }
 
-    #[cfg(feature = "crosslink")]
+    async fn get_tfl_is_activated(&self) -> Result<bool> {
+        Ok(tfl_is_activated().await)
+    }
+
+    async fn get_tfl_roster_zec(&self) -> Result<Vec<(String, f64)>> {
+        Ok(tfl_roster()
+            .await
+            .into_iter()
+            .map(|(pk, zats)| (pk, zats as f64 / 100_000_000.0))
+            .collect())
+    }
+
+    async fn get_tfl_roster_zats(&self) -> Result<Vec<(String, u64)>> {
+        Ok(tfl_roster().await)
+    }
+
+    async fn get_tfl_fat_pointer_to_bft_chain_tip(&self) -> Result<Option<String>> {
+        Ok(tfl_fat_pointer_hex().await)
+    }
+
+    async fn staking_command(&self, string: String) -> Result<String> {
+        tfl_staking_command(string).await
+    }
+
+    async fn get_tfl_final_block_hash(&self) -> Result<Option<GetBlockHashResponse>> {
+        Ok(tfl_final_height_hash()
+            .await
+            .map(|(_h, hash)| GetBlockHashResponse(hash)))
+    }
+
     async fn get_tfl_final_block_height_and_hash(
         &self,
     ) -> Result<Option<GetBlockHeightAndHashResponse>> {
-        let Some(tfl) = zakura_crosslink::global() else {
-            return Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                "TFL not running",
-                None::<()>,
-            ));
-        };
-        match tfl.call(zakura_crosslink::TFLServiceRequest::FinalBlockHeightHash).await {
-            Ok(zakura_crosslink::TFLServiceResponse::FinalBlockHeightHash(None)) => Ok(None),
-            Ok(zakura_crosslink::TFLServiceResponse::FinalBlockHeightHash(Some((h, hash)))) => {
-                Ok(Some(GetBlockHeightAndHashResponse::new(h, hash)))
-            }
-            Ok(_) => Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                "unexpected TFL response",
-                None::<()>,
-            )),
-            Err(e) => Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                e.to_string(),
-                None::<()>,
-            )),
-        }
+        Ok(tfl_final_height_hash()
+            .await
+            .map(|(h, hash)| GetBlockHeightAndHashResponse::new(h, hash)))
     }
 
-    #[cfg(feature = "crosslink")]
-    async fn get_tfl_fat_pointer_to_bft_chain_tip(&self) -> Result<Option<String>> {
-        let Some(tfl) = zakura_crosslink::global() else {
-            return Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                "TFL not running",
-                None::<()>,
-            ));
-        };
-        match tfl.call(zakura_crosslink::TFLServiceRequest::FatPointerToBFTChainTip).await {
-            Ok(zakura_crosslink::TFLServiceResponse::FatPointerToBFTChainTip(bytes)) => {
-                Ok(Some(hex::encode(bytes)))
-            }
-            Ok(_) => Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                "unexpected TFL response",
-                None::<()>,
-            )),
-            Err(e) => Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                e.to_string(),
-                None::<()>,
-            )),
-        }
+    async fn get_tfl_block_finality_from_hash(&self, hash: String) -> Result<Option<String>> {
+        let hash = block::Hash::from_hex(hash).map_error(server::error::LegacyCode::InvalidParameter)?;
+        Ok(tfl_block_finality(hash).await)
     }
 
-    #[cfg(feature = "crosslink")]
-    async fn get_tfl_roster_zats(&self) -> Result<Vec<(String, u64)>> {
-        let Some(tfl) = zakura_crosslink::global() else {
-            return Ok(Vec::new());
-        };
-        match tfl.call(zakura_crosslink::TFLServiceRequest::Roster).await {
-            Ok(zakura_crosslink::TFLServiceResponse::Roster(rows)) => {
-                Ok(rows.into_iter().map(|(pk, p)| (hex::encode(pk), p)).collect())
-            }
-            Ok(_) => Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                "unexpected TFL response",
-                None::<()>,
-            )),
-            Err(e) => Err(ErrorObject::owned(
-                ErrorCode::InternalError.code(),
-                e.to_string(),
-                None::<()>,
-            )),
-        }
+    async fn get_tfl_tx_finality_from_hash(&self, _hash: String) -> Result<Option<String>> {
+        Ok(Some("NotYetFinalized".to_string()))
+    }
+
+    async fn set_tfl_finality_by_hash(&self, hash: String) -> Result<u32> {
+        let hash = block::Hash::from_hex(hash).map_error(server::error::LegacyCode::InvalidParameter)?;
+        tfl_set_finality(hash).await
     }
 
     fn openrpc(&self) -> openrpsee::openrpc::Response {
@@ -4521,12 +4508,204 @@ impl Default for BlockHeaderObject {
     }
 }
 
-/// Response to a `getbestblockhash` and `getblockhash` RPC request.
-///
-/// Contains the hex-encoded hash of the requested block.
-///
-/// Also see the notes for the [`RpcServer::get_best_block_hash`] and `get_block_hash` methods.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+fn tfl_tip_fat_pointer() -> zakura_chain::block::FatPointerToBftBlock {
+    #[cfg(feature = "crosslink")]
+    {
+        if let Some(tfl) = zakura_crosslink::global() {
+            return tfl.tip_fat_pointer_now();
+        }
+    }
+    zakura_chain::block::FatPointerToBftBlock::null()
+}
+
+async fn tfl_is_activated() -> bool {
+    #[cfg(feature = "crosslink")]
+    {
+        let Some(tfl) = zakura_crosslink::global() else {
+            return false;
+        };
+        matches!(
+            tfl.call(zakura_crosslink::TFLServiceRequest::IsTFLActivated)
+                .await,
+            Ok(zakura_crosslink::TFLServiceResponse::IsTFLActivated(true))
+        )
+    }
+    #[cfg(not(feature = "crosslink"))]
+    {
+        false
+    }
+}
+
+async fn tfl_roster() -> Vec<(String, u64)> {
+    #[cfg(feature = "crosslink")]
+    {
+        let Some(tfl) = zakura_crosslink::global() else {
+            return Vec::new();
+        };
+        match tfl.call(zakura_crosslink::TFLServiceRequest::Roster).await {
+            Ok(zakura_crosslink::TFLServiceResponse::Roster(rows)) => rows
+                .into_iter()
+                .map(|(pk, p)| (hex::encode(pk), p))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+    #[cfg(not(feature = "crosslink"))]
+    {
+        Vec::new()
+    }
+}
+
+async fn tfl_fat_pointer_hex() -> Option<String> {
+    #[cfg(feature = "crosslink")]
+    {
+        use zakura_chain::serialization::ZcashSerialize;
+        let tfl = zakura_crosslink::global()?;
+        match tfl
+            .call(zakura_crosslink::TFLServiceRequest::FatPointerToBFTChainTip)
+            .await
+        {
+            Ok(zakura_crosslink::TFLServiceResponse::FatPointerToBFTChainTip(fp)) => {
+                let mut buf = Vec::new();
+                fp.zcash_serialize(&mut buf).ok()?;
+                Some(hex::encode(buf))
+            }
+            _ => None,
+        }
+    }
+    #[cfg(not(feature = "crosslink"))]
+    {
+        None
+    }
+}
+
+async fn tfl_final_height_hash() -> Option<(block::Height, block::Hash)> {
+    #[cfg(feature = "crosslink")]
+    {
+        let tfl = zakura_crosslink::global()?;
+        match tfl
+            .call(zakura_crosslink::TFLServiceRequest::FinalBlockHeightHash)
+            .await
+        {
+            Ok(zakura_crosslink::TFLServiceResponse::FinalBlockHeightHash(pair)) => pair,
+            _ => None,
+        }
+    }
+    #[cfg(not(feature = "crosslink"))]
+    {
+        None
+    }
+}
+
+async fn tfl_block_finality(hash: block::Hash) -> Option<String> {
+    #[cfg(feature = "crosslink")]
+    {
+        let tfl = zakura_crosslink::global()?;
+        let height = tfl_final_height_hash().await.map(|(h, _)| h)?;
+        match tfl
+            .call(zakura_crosslink::TFLServiceRequest::BlockFinalityStatus(
+                height, hash,
+            ))
+            .await
+        {
+            Ok(zakura_crosslink::TFLServiceResponse::BlockFinalityStatus(Some(s))) => {
+                Some(format!("{s:?}"))
+            }
+            _ => None,
+        }
+    }
+    #[cfg(not(feature = "crosslink"))]
+    {
+        let _ = hash;
+        None
+    }
+}
+
+async fn tfl_set_finality(hash: block::Hash) -> Result<u32> {
+    #[cfg(feature = "crosslink")]
+    {
+        let Some(tfl) = zakura_crosslink::global() else {
+            return Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "TFL not running",
+                None::<()>,
+            ));
+        };
+        match tfl
+            .call(zakura_crosslink::TFLServiceRequest::SetFinalBlockHash(hash))
+            .await
+        {
+            Ok(zakura_crosslink::TFLServiceResponse::SetFinalBlockHash(Some(h))) => Ok(h.0),
+            Ok(zakura_crosslink::TFLServiceResponse::SetFinalBlockHash(None)) => {
+                Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    "hash not accepted",
+                    None::<()>,
+                ))
+            }
+            Ok(_) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "unexpected TFL response",
+                None::<()>,
+            )),
+            Err(e) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                e.to_string(),
+                None::<()>,
+            )),
+        }
+    }
+    #[cfg(not(feature = "crosslink"))]
+    {
+        let _ = hash;
+        Err(ErrorObject::owned(
+            ErrorCode::InternalError.code(),
+            "TFL not compiled in",
+            None::<()>,
+        ))
+    }
+}
+
+async fn tfl_staking_command(cmd: String) -> Result<String> {
+    #[cfg(feature = "crosslink")]
+    {
+        let Some(tfl) = zakura_crosslink::global() else {
+            return Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "TFL not running",
+                None::<()>,
+            ));
+        };
+        match tfl
+            .call(zakura_crosslink::TFLServiceRequest::StakingCmd(cmd))
+            .await
+        {
+            Ok(zakura_crosslink::TFLServiceResponse::StakingCmd) => Ok("ok".to_string()),
+            Ok(_) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                "unexpected TFL response",
+                None::<()>,
+            )),
+            Err(e) => Err(ErrorObject::owned(
+                ErrorCode::InternalError.code(),
+                e.to_string(),
+                None::<()>,
+            )),
+        }
+    }
+    #[cfg(not(feature = "crosslink"))]
+    {
+        let _ = cmd;
+        Err(ErrorObject::owned(
+            ErrorCode::InternalError.code(),
+            "TFL not compiled in",
+            None::<()>,
+        ))
+    }
+}
+
+/// Response to a `getbestblockhash` or `getblockhash` RPC request.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct GetBlockHashResponse(#[serde(with = "hex")] pub(crate) block::Hash);
 
