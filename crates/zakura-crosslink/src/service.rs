@@ -43,6 +43,10 @@ pub fn global() -> Option<TFLServiceHandle> {
 #[derive(Clone)]
 pub struct TFLServiceHandle {
     inner: Arc<Mutex<TFLServiceInternal>>,
+    /// Local finalizer Ed25519 public key (from `insecure_user_name` / listen identity).
+    /// Zebra-crosslink keeps this as `my_public_key` and injects it into the
+    /// malachite roster when the peer list omitted us.
+    public_key: [u8; 32],
 }
 
 impl std::fmt::Debug for TFLServiceHandle {
@@ -56,7 +60,6 @@ struct TFLServiceInternal {
     activation_height: u32,
     params: ZcashCrosslinkParameters,
     signing_key: SigningKey,
-    public_key: [u8; 32],
     latest_final: Option<(BlockHeight, BlockHash)>,
     fat_pointer_to_tip: FatPointerToBftBlock,
     bft_blocks: Vec<BftBlock>,
@@ -117,6 +120,11 @@ impl TFLServiceHandle {
                 Ok(TFLServiceResponse::TxFinalityStatus(status))
             }
             TFLServiceRequest::Roster => {
+                // Same malachite workaround as zebra-crosslink: this node's key
+                // must appear even if the configured peer roster omitted it.
+                if !inner.validators.contains_key(&self.public_key) {
+                    inner.validators.insert(self.public_key, 0);
+                }
                 let roster = inner.validators.iter().map(|(k, v)| (*k, *v)).collect();
                 Ok(TFLServiceResponse::Roster(roster))
             }
@@ -164,6 +172,11 @@ impl TFLServiceHandle {
 
     pub(crate) async fn next_bft_height(&self) -> u32 {
         self.inner.lock().await.bft_blocks.len() as u32 + 1
+    }
+
+    /// This node's finalizer public key (zebra `my_public_key`).
+    pub fn local_public_key(&self) -> [u8; 32] {
+        self.public_key
     }
 
     async fn apply_staking_cmd(&self, cmd: &str) -> Result<(), TFLServiceError> {
@@ -382,19 +395,25 @@ where
         ..PROTOTYPE_PARAMETERS
     };
 
+    info!(
+        public_key = %hex::encode(public_key),
+        peers = config.malachite_peers.len(),
+        "TFL local finalizer identity"
+    );
+
     let handle = TFLServiceHandle {
         inner: Arc::new(Mutex::new(TFLServiceInternal {
             activated: false,
             activation_height: config.activation_height,
             params,
             signing_key: signing_key.clone(),
-            public_key,
             latest_final: None,
             fat_pointer_to_tip: FatPointerToBftBlock::null(),
             bft_blocks: Vec::new(),
             final_change_tx: broadcast::channel(16).0,
             validators,
         })),
+        public_key,
     };
 
     if config.tenderlink_enabled() {
@@ -546,6 +565,14 @@ mod tests {
         let (_, local_pk) = key_from_name(id);
         let (_, _, peer_pk) = rng_keys_from_bytes(id.as_bytes());
         assert_eq!(local_pk, peer_pk);
+    }
+
+    #[test]
+    fn fat_pointer_signature_public_key_matches_local_identity() {
+        let (sk, pk) = key_from_name("zakura-crosslink-lab");
+        let fp = sign_fat_pointer(&Blake3Hash([3u8; 32]), &[sk]);
+        assert_eq!(fp.signatures.len(), 1);
+        assert_eq!(fp.signatures[0].public_key, pk);
     }
 
     #[test]

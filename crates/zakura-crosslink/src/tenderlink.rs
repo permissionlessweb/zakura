@@ -177,7 +177,7 @@ fn addr_to_noise(identity: &str, endpoint_addr: &str) -> (StaticDHKeyPair, Secur
 /// Spawn tenderlink so this node can sit on the Crosslink prototype testnet.
 pub fn spawn_tenderlink<S>(
     handle: TFLServiceHandle,
-    mut state: S,
+    state: S,
     config: Config,
     signing_key: SigningKey,
 ) where
@@ -218,10 +218,16 @@ pub fn spawn_tenderlink<S>(
     let mut roster: Vec<SortedRosterMember> = Vec::new();
     let mut evidence: Vec<EndpointEvidence> = Vec::new();
 
-    let my_pk: [u8; 32] = {
-        let vk = ed25519_zebra::VerificationKey::from(&signing_key);
-        vk.into()
-    };
+    let my_pk = handle.local_public_key();
+    debug_assert_eq!(
+        my_pk,
+        {
+            let vk = ed25519_zebra::VerificationKey::from(&signing_key);
+            let pk: [u8; 32] = vk.into();
+            pk
+        },
+        "tenderlink signing key must match TFL my_public_key"
+    );
     roster.push(SortedRosterMember {
         pub_key: PubKeyID(my_pk),
         stake: 1,
@@ -260,7 +266,7 @@ pub fn spawn_tenderlink<S>(
     let h_propose = handle.clone();
     let h_validate = handle.clone();
     let h_decide = handle.clone();
-    let mut state_p = state.clone();
+    let state_p = state.clone();
     let sigma = config.confirmation_depth_sigma.max(1);
     let activation = config.activation_height;
 
