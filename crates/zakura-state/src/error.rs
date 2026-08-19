@@ -735,6 +735,9 @@ pub enum ValidateContextError {
         height: Option<block::Height>,
     },
 
+    #[error("invalid delegation bond: {0}")]
+    InvalidDelegationBond(String),
+
     #[error("error updating a note commitment tree: {0}")]
     NoteCommitmentTreeError(#[from] zakura_chain::parallel::tree::NoteCommitmentTreeError),
 
@@ -909,6 +912,7 @@ impl ValidateContextError {
                 consensus("context.calculate_block_chain_value_change")
             }
             Self::AddValuePool { .. } => consensus("context.add_value_pool"),
+            Self::InvalidDelegationBond(_) => consensus("context.invalid_delegation_bond"),
             Self::UnknownSproutAnchor { .. } => consensus("context.unknown_sprout_anchor"),
             Self::UnknownSaplingAnchor { .. } => consensus("context.unknown_sapling_anchor"),
             Self::UnknownOrchardAnchor { .. } => consensus("context.unknown_orchard_anchor"),
@@ -937,6 +941,7 @@ impl ValidateContextError {
             | ValidateContextError::DuplicateIronwoodNullifier { .. }
             | ValidateContextError::NegativeRemainingTransactionValue { .. }
             | ValidateContextError::AddValuePool { .. }
+            | ValidateContextError::InvalidDelegationBond(_)
             | ValidateContextError::InvalidBlockCommitment(_)
             | ValidateContextError::UnknownSproutAnchor { .. }
             | ValidateContextError::UnknownSaplingAnchor { .. }

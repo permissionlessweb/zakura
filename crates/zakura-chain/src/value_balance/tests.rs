@@ -33,46 +33,6 @@ fn ironwood_deposit_updates_only_the_ironwood_chain_pool() {
 }
 
 #[test]
-fn follower_staking_mints_pos_when_bonded_and_clamps_underflow() {
-    let _init_guard = zakura_test::init();
-
-    let bonded = Amount::<NonNegative>::try_from(100).unwrap();
-    let pool = ValueBalance::<NonNegative>::from_staking_bonded_amount(bonded);
-
-    let no_tx = ValueBalance::<NegativeAllowed>::zero();
-    let with_pos = pool
-        .follower_staking_chain_value_pool_change(no_tx, 1)
-        .expect("POS mint on a live bonded pool");
-    assert_eq!(
-        with_pos.staking_bonded_amount().zatoshis(),
-        ValueBalance::<NonNegative>::SEASON1_POS_BLOCK_REWARD_ZATS
-    );
-
-    let genesis = pool
-        .follower_staking_chain_value_pool_change(no_tx, 0)
-        .expect("genesis does not mint");
-    assert_eq!(genesis.staking_bonded_amount().zatoshis(), 0);
-
-    let empty = ValueBalance::<NonNegative>::zero();
-    let no_bonds = empty
-        .follower_staking_chain_value_pool_change(no_tx, 10)
-        .expect("no mint without bonded");
-    assert_eq!(no_bonds.staking_bonded_amount().zatoshis(), 0);
-
-    let withdraw = ValueBalance::from_staking_unbonded_amount(
-        Amount::<NegativeAllowed>::try_from(-10_000).unwrap(),
-    );
-    let clamped = pool
-        .follower_staking_chain_value_pool_change(withdraw, 0)
-        .expect("underflow drains to zero instead of error");
-    let applied = pool
-        .add_chain_value_pool_change(clamped)
-        .expect("clamped change applies");
-    assert_eq!(applied.staking_bonded_amount().zatoshis(), 0);
-    assert_eq!(applied.staking_unbonded_amount().zatoshis(), 0);
-}
-
-#[test]
 fn remaining_transaction_value_includes_ironwood() {
     let _init_guard = zakura_test::init();
 

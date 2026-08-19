@@ -257,6 +257,21 @@ pub struct ChainInner {
     pub(crate) chain_value_pools: ValueBalance<NonNegative>,
     /// The block info after the given block height.
     pub(crate) block_info_by_height: BTreeMap<block::Height, BlockInfo>,
+
+    /// Season 1 delegation bonds (v13 `delegation_bonds`).
+    pub(crate) delegation_bonds: HashMap<
+        crate::service::finalized_state::disk_format::BondKey,
+        (
+            crate::service::finalized_state::disk_format::DelegationBond,
+            crate::service::delegation::BondStatusInChain,
+        ),
+    >,
+    /// Per-block pre-retarget finalizer, for tip revert.
+    bond_retargets: Vec<
+        HashMap<crate::service::finalized_state::disk_format::BondKey, [u8; 32]>,
+    >,
+    /// Per-block POS split, for tip revert.
+    bond_rewards: Vec<Vec<(crate::service::finalized_state::disk_format::BondKey, u64)>>,
 }
 
 impl Chain {
@@ -303,6 +318,9 @@ impl Chain {
             history_trees_by_height: Default::default(),
             chain_value_pools: finalized_tip_chain_value_pools,
             block_info_by_height: Default::default(),
+            delegation_bonds: Default::default(),
+            bond_retargets: Default::default(),
+            bond_rewards: Default::default(),
         };
 
         let mut chain = Self {
@@ -400,6 +418,13 @@ impl Chain {
             .blocks
             .remove(&block_height)
             .expect("only called while blocks is populated");
+
+        if !self.bond_rewards.is_empty() {
+            self.bond_rewards.remove(0);
+        }
+        if !self.bond_retargets.is_empty() {
+            self.bond_retargets.remove(0);
+        }
 
         // Update cumulative data members.
         self.revert_chain_with(&block, RevertPosition::Root);
@@ -1799,6 +1824,8 @@ impl Chain {
         // add work to partial cumulative work
         self.partial_cumulative_work = partial_cumulative_work;
 
+        self.bond_retargets.push(HashMap::new());
+
         // for each transaction in block
         for (transaction_index, (transaction, transaction_hash)) in block
             .transactions
@@ -1914,13 +1941,78 @@ impl Chain {
             self.update_chain_tip_with(&(outputs, &transaction_hash, new_outputs))?;
             // delete the utxos this consumed
             self.update_chain_tip_with(&(inputs, &transaction_hash, spent_outputs))?;
+
+            if let Some(staking_action) = transaction.staking_action() {
+                crate::service::delegation::update_chain_tip_with_delegation_bond(
+                    &mut self.inner.chain_value_pools,
+                    &mut self.inner.delegation_bonds,
+                    &mut self.inner.bond_retargets,
+                    staking_action,
+                    transaction_location,
+                )?;
+            }
         }
 
         // update the chain value pool balances
         let size = block.zcash_serialized_size();
         self.update_chain_tip_with(&(*chain_value_pool_change, height, size))?;
 
+        let rewards = crate::service::delegation::apply_pos_block_reward(
+            &mut self.inner.chain_value_pools,
+            &mut self.inner.delegation_bonds,
+        );
+        self.bond_rewards.push(rewards);
+
         Ok(())
+    }
+}
+
+impl Chain {
+    fn revert_delegation_bond(
+        &mut self,
+        staking_action: &zakura_chain::transaction::StakingAction,
+        position: RevertPosition,
+    ) {
+        if position == RevertPosition::Root {
+            return;
+        }
+        use crate::service::delegation::BondStatusInChain;
+        use zakura_chain::transaction::StakingActionKind;
+
+        let bond_key = staking_action.arg32_0;
+        match staking_action.kind {
+            StakingActionKind::CreateNewDelegationBond => {
+                assert!(
+                    self.delegation_bonds.remove(&bond_key).is_some(),
+                    "bond must be present if it was added to chain"
+                );
+            }
+            StakingActionKind::BeginDelegationUnbonding => {
+                let (bond, status) = self
+                    .delegation_bonds
+                    .get_mut(&bond_key)
+                    .expect("bond must be present if unbonding was added to chain");
+                assert_eq!(*status, BondStatusInChain::Unbonding);
+                *status = BondStatusInChain::Active;
+                let bond_amount = bond.amount;
+                let new_bonded = (self.chain_value_pools.staking_bonded_amount() + bond_amount)
+                    .expect("reverting unbonding should not overflow bonded");
+                self.chain_value_pools.set_staking_bonded_amount(new_bonded);
+                let new_unbonded = (self.chain_value_pools.staking_unbonded_amount() - bond_amount)
+                    .expect("reverting unbonding should not underflow unbonded");
+                self.chain_value_pools
+                    .set_staking_unbonded_amount(new_unbonded);
+            }
+            StakingActionKind::WithdrawDelegationBond => {
+                let (_bond, status) = self
+                    .delegation_bonds
+                    .get_mut(&bond_key)
+                    .expect("bond must be present if withdrawal was added to chain");
+                assert_eq!(*status, BondStatusInChain::Withdrawn);
+                *status = BondStatusInChain::Unbonding;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -2018,6 +2110,35 @@ impl UpdateWith<ContextuallyVerifiedBlock> for Chain {
             .expect("work has already been validated");
         self.partial_cumulative_work -= block_work;
 
+        if position == RevertPosition::Tip {
+            let rewards = self
+                .bond_rewards
+                .pop()
+                .expect("rewards must exist for tip block");
+            for (bond_key, reward_amount) in rewards {
+                let (bond, _status) = self
+                    .delegation_bonds
+                    .get_mut(&bond_key)
+                    .expect("bond must exist if it received rewards");
+                let reward = Amount::try_from(reward_amount as i64).expect("reward in range");
+                bond.amount = (bond.amount - reward).expect("reverting POS should not underflow");
+                let new_bonded = (self.chain_value_pools.staking_bonded_amount() - reward)
+                    .expect("reverting POS should not underflow bonded");
+                self.chain_value_pools.set_staking_bonded_amount(new_bonded);
+            }
+            let retargets = self
+                .bond_retargets
+                .pop()
+                .expect("retargets must exist for tip block");
+            for (bond_key, old_target) in retargets {
+                let (bond, _status) = self
+                    .delegation_bonds
+                    .get_mut(&bond_key)
+                    .expect("bond must exist if it was retargeted");
+                bond.target_finalizer = old_target;
+            }
+        }
+
         // for each transaction in block
         for (transaction, transaction_hash) in
             block.transactions.iter().zip(transaction_hashes.iter())
@@ -2096,6 +2217,10 @@ impl UpdateWith<ContextuallyVerifiedBlock> for Chain {
             self.revert_chain_with(&(outputs, transaction_hash, new_outputs), position);
             // reset the utxos this consumed
             self.revert_chain_with(&(inputs, transaction_hash, spent_outputs), position);
+
+            if let Some(staking_action) = transaction.staking_action() {
+                self.revert_delegation_bond(staking_action, position);
+            }
 
             // TODO: move this to the history tree UpdateWith.revert...()?
             // remove `transaction.hash` from `tx_loc_by_hash`
@@ -2571,15 +2696,7 @@ impl UpdateWith<(ValueBalance<NegativeAllowed>, Height, usize)> for Chain {
         &mut self,
         (block_value_pool_change, height, size): &(ValueBalance<NegativeAllowed>, Height, usize),
     ) -> Result<(), ValidateContextError> {
-        let rerouted_change = self
-            .chain_value_pools
-            .follower_staking_chain_value_pool_change(*block_value_pool_change, height.0)
-            .map_err(|value_balance_error| ValidateContextError::AddValuePool {
-                value_balance_error,
-                chain_value_pools: Box::new(self.chain_value_pools),
-                block_value_pool_change: Box::new(*block_value_pool_change),
-                height: Some(*height),
-            })?;
+        let rerouted_change = *block_value_pool_change;
         match self
             .chain_value_pools
             .add_chain_value_pool_change(rerouted_change)

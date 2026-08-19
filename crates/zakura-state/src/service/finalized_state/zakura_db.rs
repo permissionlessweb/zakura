@@ -32,6 +32,7 @@ use super::disk_format::upgrade::restorable_db_versions;
 
 pub mod block;
 pub mod chain;
+pub mod delegation;
 #[allow(dead_code)]
 pub(crate) mod commitment_roots_db;
 #[allow(dead_code)]

@@ -302,17 +302,28 @@ impl DiskWriteBatch {
                 }
             })?;
 
-        let tx_pool_change = block_value_pool_change;
-        let block_value_pool_change = value_pool
-            .follower_staking_chain_value_pool_change(tx_pool_change, finalized.height.0)
-            .map_err(|value_balance_error| ValidateContextError::AddValuePool {
-                value_balance_error,
-                chain_value_pools: Box::new(value_pool),
-                block_value_pool_change: Box::new(tx_pool_change),
-                height: Some(finalized.height),
-            })?;
+        let mut working_pool = value_pool;
+        let mut bonds = db.all_delegation_bonds();
+        if !finalized.height.is_min() {
+            let mut retargets = vec![std::collections::HashMap::new()];
+            for (transaction_index, transaction) in finalized.block.transactions.iter().enumerate()
+            {
+                if let Some(staking_action) = transaction.staking_action() {
+                    crate::service::delegation::update_chain_tip_with_delegation_bond(
+                        &mut working_pool,
+                        &mut bonds,
+                        &mut retargets,
+                        staking_action,
+                        crate::TransactionLocation::from_usize(
+                            finalized.height,
+                            transaction_index,
+                        ),
+                    )?;
+                }
+            }
+        }
 
-        let new_value_pool = value_pool
+        let mut new_value_pool = working_pool
             .add_chain_value_pool_change(block_value_pool_change)
             .map_err(|value_balance_error| ValidateContextError::AddValuePool {
                 value_balance_error,
@@ -320,6 +331,10 @@ impl DiskWriteBatch {
                 block_value_pool_change: Box::new(block_value_pool_change),
                 height: Some(finalized.height),
             })?;
+
+        if !finalized.height.is_min() {
+            crate::service::delegation::apply_pos_block_reward(&mut new_value_pool, &mut bonds);
+        }
 
         // Update value pool metrics for observability (ZIP-209 compliance monitoring)
         value_pool_metrics(&new_value_pool);

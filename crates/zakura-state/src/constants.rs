@@ -24,6 +24,10 @@ pub const MAX_BLOCK_REORG_HEIGHT: u32 = zakura_chain::parameters::constants::MAX
 /// The directory name used to distinguish the state database from Zebra's other databases or flat files.
 pub const STATE_DATABASE_KIND: &str = "state";
 
+/// Season 1 POS issuance per PoW block with at least one Active bond
+/// (`crosslink_monolith` v13 `POS_BLOCK_REWARD_ZATS`).
+pub const POS_BLOCK_REWARD_ZATS: u64 = 500_000_000;
+
 /// The minimum retention window allowed in pruned storage mode.
 ///
 /// Pruned mode deletes historical raw transaction data at `tip - retention`. The
@@ -94,7 +98,7 @@ const DATABASE_FORMAT_VERSION: u64 = 28;
 /// - adding new column families,
 /// - changing the format of a column family in a compatible way, or
 /// - breaking changes with compatibility code in all supported Zebra versions.
-const DATABASE_FORMAT_MINOR_VERSION: u64 = 1;
+const DATABASE_FORMAT_MINOR_VERSION: u64 = 2;
 
 /// The database format patch version, incremented each time the on-disk database format has a
 /// significant format compatibility fix.

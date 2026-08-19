@@ -211,6 +211,9 @@ pub const STATE_COLUMN_FAMILIES_IN_CODE: &[&str] = &[
     "history_tree",
     "tip_chain_value_pool",
     BLOCK_INFO,
+    // Season 1 delegation bonds (v13 column names)
+    "delegation_bond_by_key",
+    "bond_status_by_key",
     // Verified-commitment-trees serving index
     COMMITMENT_ROOTS_BY_HEIGHT,
     // Storage policy

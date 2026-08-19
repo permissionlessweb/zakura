@@ -71,6 +71,7 @@ pub mod chain_tip;
 pub mod watch_receiver;
 
 pub mod check;
+pub(crate) mod delegation;
 
 pub(crate) mod finalized_state;
 pub(crate) mod non_finalized_state;

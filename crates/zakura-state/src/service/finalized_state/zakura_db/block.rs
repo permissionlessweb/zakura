@@ -1486,6 +1486,10 @@ impl DiskWriteBatch {
             value_pool,
         )?;
 
+        if !finalized.height.is_min() {
+            self.prepare_delegation_bonds_batch(zakura_db, finalized)?;
+        }
+
         // The block has passed contextual validation, so update the metrics
         block_precommit_metrics(&finalized.block, finalized.hash, finalized.height);
 

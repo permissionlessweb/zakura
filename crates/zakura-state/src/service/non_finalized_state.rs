@@ -482,7 +482,7 @@ impl NonFinalizedState {
         // If the parent is the tip of the finalized_state we create a new chain and insert it
         // into the non finalized state
         let chain_result = if root_parent_hash == finalized_state.finalized_tip_hash() {
-            let chain = Chain::new(
+            let mut chain = Chain::new(
                 &self.network,
                 finalized_state
                     .finalized_tip_height()
@@ -494,6 +494,7 @@ impl NonFinalizedState {
                 finalized_state.history_tree(),
                 finalized_state.finalized_value_pool(),
             );
+            chain.delegation_bonds = finalized_state.all_delegation_bonds();
             Arc::new(chain)
         } else {
             // The parent is not the finalized_tip and still exist in the NonFinalizedState
@@ -549,7 +550,7 @@ impl NonFinalizedState {
         #[cfg(test)]
         let finalized_tip_height = finalized_tip_height.unwrap_or(zakura_chain::block::Height(0));
 
-        let chain = Chain::new(
+        let mut chain = Chain::new(
             &self.network,
             finalized_tip_height,
             finalized_state.sprout_tree_for_tip()?,
@@ -559,6 +560,7 @@ impl NonFinalizedState {
             finalized_state.history_tree(),
             finalized_state.finalized_value_pool(),
         );
+        chain.delegation_bonds = finalized_state.all_delegation_bonds();
 
         let (height, hash) = (prepared.height, prepared.hash);
 
@@ -601,6 +603,12 @@ impl NonFinalizedState {
             &prepared,
             &new_chain.unspent_utxos(),
             &new_chain.spent_utxos,
+            finalized_state,
+        )?;
+
+        check::delegation::validate_delegation_bonds(
+            &prepared,
+            &new_chain,
             finalized_state,
         )?;
 
