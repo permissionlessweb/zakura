@@ -333,7 +333,7 @@ impl DiskWriteBatch {
             })?;
 
         if !finalized.height.is_min() {
-            crate::service::delegation::apply_pos_block_reward(&mut new_value_pool, &mut bonds);
+            crate::service::delegation::apply_pos_block_reward(&mut new_value_pool, &mut bonds)?;
         }
 
         // Update value pool metrics for observability (ZIP-209 compliance monitoring)

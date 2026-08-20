@@ -81,7 +81,7 @@ impl DiskWriteBatch {
         finalized: &FinalizedBlock,
     ) -> Result<(), crate::ValidateContextError> {
         use crate::service::delegation::{
-            apply_pos_block_reward, update_chain_tip_with_delegation_bond,
+            accrue_pos_on_bonds, update_chain_tip_with_delegation_bond,
         };
 
         let mut bonds = db.all_delegation_bonds();
@@ -106,7 +106,9 @@ impl DiskWriteBatch {
             }
         }
 
-        apply_pos_block_reward(&mut pools, &mut bonds);
+        // Bond rows accrue POS; do not mint into the scratch MAX_MONEY pool
+        // (that panic was height 1037: 21e6 ZEC + 5 ZEC).
+        accrue_pos_on_bonds(&mut bonds);
 
         for (key, (bond, status)) in &bonds {
             let disk_status = match status {

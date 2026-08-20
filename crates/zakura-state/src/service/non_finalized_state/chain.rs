@@ -1958,7 +1958,7 @@ impl Chain {
         let rewards = crate::service::delegation::apply_pos_block_reward(
             &mut self.inner.chain_value_pools,
             &mut self.inner.delegation_bonds,
-        );
+        )?;
         self.bond_rewards.push(rewards);
 
         Ok(())

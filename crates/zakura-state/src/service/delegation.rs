@@ -173,9 +173,8 @@ pub fn update_bonds_with_pos_issuance(
     reward_per_bond
 }
 
-/// Mint the Season 1 block reward into Active bonds and `staking_bonded`.
-pub fn apply_pos_block_reward(
-    chain_value_pools: &mut ValueBalance<NonNegative>,
+/// Accrue Season 1 POS onto Active bond rows only. Does not touch value pools.
+pub fn accrue_pos_on_bonds(
     delegation_bonds: &mut HashMap<BondKey, (DelegationBond, BondStatusInChain)>,
 ) -> Vec<(BondKey, u64)> {
     if !delegation_bonds
@@ -184,12 +183,28 @@ pub fn apply_pos_block_reward(
     {
         return Vec::new();
     }
-    let rewards = update_bonds_with_pos_issuance(POS_BLOCK_REWARD_ZATS, delegation_bonds);
-    let total = Amount::try_from(POS_BLOCK_REWARD_ZATS as i64).expect("constant in range");
-    let new_bonded = (chain_value_pools.staking_bonded_amount() + total)
-        .expect("POS mint should not overflow bonded");
+    update_bonds_with_pos_issuance(POS_BLOCK_REWARD_ZATS, delegation_bonds)
+}
+
+/// Mint the Season 1 block reward into Active bonds and `staking_bonded`.
+pub fn apply_pos_block_reward(
+    chain_value_pools: &mut ValueBalance<NonNegative>,
+    delegation_bonds: &mut HashMap<BondKey, (DelegationBond, BondStatusInChain)>,
+) -> Result<Vec<(BondKey, u64)>, ValidateContextError> {
+    let rewards = accrue_pos_on_bonds(delegation_bonds);
+    if rewards.is_empty() {
+        return Ok(rewards);
+    }
+    let new_bonded = Amount::<NonNegative>::try_from(
+        chain_value_pools.staking_bonded_amount().zatoshis() + POS_BLOCK_REWARD_ZATS as i64,
+    )
+    .map_err(|e| {
+        ValidateContextError::InvalidDelegationBond(format!(
+            "staking_bonded overflow from POS issuance: {e:?}"
+        ))
+    })?;
     chain_value_pools.set_staking_bonded_amount(new_bonded);
-    rewards
+    Ok(rewards)
 }
 
 #[cfg(test)]
@@ -223,5 +238,31 @@ mod tests {
         assert_eq!(total, 100);
         assert_eq!(bonds[&b].0.amount.zatoshis() as u64, 300 + 75);
         assert_eq!(bonds[&a].0.amount.zatoshis() as u64, 100 + 25);
+    }
+
+    #[test]
+    fn dummy_max_money_pool_does_not_panic_when_accruing_pos() {
+        let loc = TransactionLocation::from_usize(Height(1), 0);
+        let key = [1u8; 32];
+        let mut bonds = HashMap::new();
+        bonds.insert(
+            key,
+            (
+                DelegationBond::new(Amount::try_from(100u64).unwrap(), [0; 32], loc),
+                BondStatusInChain::Active,
+            ),
+        );
+        accrue_pos_on_bonds(&mut bonds);
+        assert_eq!(
+            bonds[&key].0.amount.zatoshis() as u64,
+            100 + POS_BLOCK_REWARD_ZATS
+        );
+
+        let mut capped = ValueBalance::<NonNegative>::zero();
+        capped.set_staking_bonded_amount(
+            Amount::try_from(zakura_chain::amount::MAX_MONEY).unwrap(),
+        );
+        let mut bonds2 = bonds.clone();
+        assert!(apply_pos_block_reward(&mut capped, &mut bonds2).is_err());
     }
 }
